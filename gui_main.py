@@ -33,15 +33,18 @@ class ProcessThread(QThread):
             # 动态导入避免循环依赖
             import financial_analyzer
             
-            # 这里将整合重构后的financial_analyzer
             self.log.emit("🔄 开始处理...")
-            self.progress.emit(0, 100, "初始化...")
+            self.progress.emit(0, 100, "加载分析模块...")
             
-            # TODO: 调用重构后的处理函数
-            # analyzer = financial_analyzer.FinancialAnalyzer(self.config, self.progress_callback)
-            # analyzer.process_directory(self.directory)
+            # 实例化分析器并传入回调
+            analyzer = financial_analyzer.FinancialAnalyzer(
+                config=self.config, 
+                progress_callback=self.progress_callback
+            )
             
-            self.log.emit("✅ 处理完成！")
+            # 开始执行处理
+            analyzer.process_directory(self.directory)
+            
             self.finished.emit(True, "数据处理完成")
         except Exception as e:
             self.log.emit(f"❌ 错误: {str(e)}")
