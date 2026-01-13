@@ -11,7 +11,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--output-dir", type=str, default=None, help="输出目录")
     parser.add_argument("--glob", type=str, default=None, help="文件匹配模式，如 *.xlsx")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Web监听地址")
-    parser.add_argument("--port", type=int, default=8765, help="Web端口")
+    parser.add_argument("--port", type=int, default=8765, help="Web端口（传 0 自动选择空闲端口）")
     parser.add_argument("--no-browser", action="store_true", help="启动Web时不自动打开浏览器")
     args = parser.parse_args(argv)
 
@@ -53,4 +53,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

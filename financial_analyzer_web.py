@@ -3,6 +3,7 @@ import sys
 import queue
 import threading
 import logging
+import socket
 from dataclasses import asdict
 from typing import Optional, Any, Dict, List
 from pathlib import Path
@@ -204,11 +205,45 @@ def _web_index_html() -> str:
     except Exception:
         return "<!doctype html><html><head><meta charset='utf-8'><title>Web</title></head><body>缺少 web/index.html</body></html>"
 
+def _choose_web_port(host: str, requested_port: int) -> int:
+    def try_bind(h: str, p: int) -> Optional[int]:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((h, int(p)))
+            return int(s.getsockname()[1])
+        except Exception:
+            return None
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    rp = int(requested_port or 0)
+    if rp <= 0:
+        picked = try_bind(host, 0) or try_bind("127.0.0.1", 0)
+        return int(picked or 87650)
+
+    if try_bind(host, rp) is not None:
+        return rp
+
+    for p in range(rp + 1, rp + 200):
+        if try_bind(host, p) is not None:
+            print(f"端口 {rp} 被占用，已改用 {p}")
+            return p
+
+    picked = try_bind(host, 0) or try_bind("127.0.0.1", 0)
+    if picked is None:
+        return rp
+    print(f"端口 {rp} 被占用，已改用 {picked}")
+    return int(picked)
+
 
 def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> int:
     try:
         from fastapi import FastAPI
-        from fastapi.responses import HTMLResponse, StreamingResponse
+        from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, Response
         from fastapi.staticfiles import StaticFiles
     except Exception:
         print("缺少依赖：fastapi。请先安装：py -m pip install fastapi uvicorn")
@@ -262,6 +297,13 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return _web_index_html()
+
+    @app.get("/favicon.ico")
+    def favicon():
+        p = get_resource_path("app_icon.ico")
+        if p.exists() and p.is_file():
+            return FileResponse(str(p), media_type="image/x-icon")
+        return Response(status_code=404)
 
     @app.get("/api/config")
     def api_get_config() -> Dict[str, Any]:
@@ -422,11 +464,12 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    chosen_port = _choose_web_port(host, int(port or 0))
     if open_browser:
         try:
             import webbrowser
 
-            webbrowser.open(f"http://{host}:{port}/")
+            webbrowser.open(f"http://{host}:{chosen_port}/")
         except Exception:
             pass
 
@@ -436,7 +479,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         print("缺少依赖：uvicorn。请先安装：py -m pip install uvicorn")
         return 1
 
-    uvicorn.run(app, host=host, port=int(port), log_level="info")
+    uvicorn.run(app, host=host, port=int(chosen_port), log_level="info")
     return 0
 
 
