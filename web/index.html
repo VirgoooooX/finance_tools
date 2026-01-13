@@ -1,370 +1,427 @@
 <!doctype html>
-<html lang="zh-CN" data-bs-theme="light">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>财务数据分析（本机 Web）</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>财务数据分析</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-  <link href="/static/styles.css?v=2" rel="stylesheet">
+  <link href="/static/styles.css?v=4" rel="stylesheet">
 </head>
 <body>
-  <div class="container-fluid py-3 app-shell dense">
-    <div class="topbar p-3 p-md-4 mb-3">
-      <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3">
-        <div>
-          <div class="d-flex align-items-center gap-2">
-            <i class="bi bi-bar-chart-fill fs-4"></i>
-            <div class="h4 mb-0">财务数据分析</div>
-          </div>
-          <small>本机 Web 控制台（不上传/不下载；本地 Python 负责文件读写）</small>
-        </div>
-        <div class="d-flex flex-wrap gap-2">
-          <button id="btnStart" class="btn btn-primary"><i class="bi bi-play-fill me-1"></i>开始运行</button>
-          <button id="btnStop" class="btn btn-outline-light" disabled><i class="bi bi-stop-fill me-1"></i>停止</button>
-        </div>
+  
+  <header class="header">
+    <div class="brand">
+      <i class="bi bi-pie-chart-fill"></i>
+      <span>财务数据分析</span>
+    </div>
+    
+    <div class="header-controls">
+      <div class="badge badge-subtle">
+        <span class="badge-dot"></span>
+        <span id="statusText">就绪</span>
       </div>
-      <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
-        <span class="pill"><i class="bi bi-dot"></i><span id="statusText">就绪</span></span>
-        <span class="pill"><i class="bi bi-hourglass-split"></i><span id="progressDetail">0/1</span></span>
-        <span class="pill"><i class="bi bi-hdd-network"></i><span class="mono" id="hostInfo">127.0.0.1</span></span>
+      <div class="badge badge-subtle">
+        <i class="bi bi-hourglass-split"></i>
+        <span id="progressDetail">0/1</span>
       </div>
-      <div class="progress mt-3" role="progressbar" aria-label="progress" style="height: 10px; border-radius: 999px; overflow: hidden;">
-        <div id="progressBar" class="progress-bar" style="width: 0%"></div>
+      
+      <div class="progress-wrapper">
+        <div id="progressBar" class="progress-fill" style="width: 0%"></div>
       </div>
     </div>
+  </header>
 
-    <ul class="nav nav-pills mb-3" id="tabs">
-      <li class="nav-item"><button class="nav-link active" data-tab="tab-config"><i class="bi bi-sliders me-1"></i>配置</button></li>
-      <li class="nav-item"><button class="nav-link" data-tab="tab-run"><i class="bi bi-rocket-takeoff me-1"></i>运行</button></li>
-      <li class="nav-item"><button class="nav-link" data-tab="tab-logs"><i class="bi bi-journal-text me-1"></i>日志</button></li>
-      <li class="nav-item"><button class="nav-link" data-tab="tab-results"><i class="bi bi-table me-1"></i>结果</button></li>
-    </ul>
+  <div class="app-container">
+    
+    <div class="nav-tabs-custom" id="tabs">
+      <button class="nav-tab active" data-tab="tab-config"><i class="bi bi-sliders"></i>配置</button>
+      <button class="nav-tab" data-tab="tab-query"><i class="bi bi-search"></i>查询</button>
+      <button class="nav-tab" data-tab="tab-run"><i class="bi bi-play-circle"></i>运行</button>
+      <button class="nav-tab" data-tab="tab-logs"><i class="bi bi-journal-text"></i>日志</button>
+      <button class="nav-tab" data-tab="tab-results"><i class="bi bi-table"></i>结果</button>
+    </div>
 
+    <!-- Configuration Tab -->
     <div id="tab-config" class="tab-pane">
-      <div class="settings-grid">
-        <div class="card">
-          <div class="card-body">
-            <div class="settings-card-header">
-              <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-2">
+      <div class="grid grid-cols-3">
+        <!-- Main Configuration -->
+        <div class="col-span-2">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><i class="bi bi-gear"></i>核心配置</div>
+              <div class="d-flex gap-2">
+                <button id="btnReloadCfg" class="btn btn-secondary btn-sm"><i class="bi bi-arrow-clockwise"></i>重载</button>
+                <button id="btnSaveCfg" class="btn btn-primary btn-sm"><i class="bi bi-save"></i>保存</button>
+              </div>
+            </div>
+            
+            <div class="card-body">
+              <div class="grid grid-cols-2">
+                <div class="form-group col-span-2">
+                  <label class="form-label">输入目录</label>
+                  <input id="input_dir" class="form-control" placeholder="例如：L:\Web\Financial data analysis">
+                  <div class="form-help">要扫描的 Excel 所在文件夹</div>
+                </div>
+                
+                <div class="form-group">
+                  <label class="form-label">文件匹配模式</label>
+                  <input id="file_glob" class="form-control" placeholder="例如：*.xlsx">
+                </div>
+                
+                <div class="form-group">
+                  <label class="form-label">输出目录</label>
+                  <input id="output_dir" class="form-control" placeholder="例如：L:\Web\Financial data analysis">
+                </div>
+                
+                <div class="form-group col-span-2">
+                  <label class="form-label">输出文件名</label>
+                  <input id="output_basename" class="form-control" placeholder="例如：清洗后的AI标准财务表.xlsx">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><i class="bi bi-funnel"></i>关键字识别</div>
+            </div>
+            <div class="card-body">
+              <div class="grid grid-cols-3">
                 <div>
-                  <div class="h5 mb-1 section-title"><i class="bi bi-sliders2 me-1"></i>设置</div>
-                  <div class="help">保存配置后，用于扫描与运行。</div>
+                  <label class="form-label">BS Sheet 关键字</label>
+                  <input id="sheet_keyword_bs" class="form-control">
                 </div>
+                <div>
+                  <label class="form-label">PL Sheet 关键字</label>
+                  <input id="sheet_keyword_pl" class="form-control">
+                </div>
+                <div>
+                  <label class="form-label">CF Sheet 关键字</label>
+                  <input id="sheet_keyword_cf" class="form-control">
+                </div>
+                
+                <div>
+                  <label class="form-label">BS 表头关键字</label>
+                  <input id="header_keyword_bs" class="form-control">
+                </div>
+                <div>
+                  <label class="form-label">PL 表头关键字</label>
+                  <input id="header_keyword_pl" class="form-control">
+                </div>
+                <div>
+                  <label class="form-label">CF 表头关键字</label>
+                  <input id="header_keyword_cf" class="form-control">
+                </div>
+              </div>
+            </div>
+          </div>
+          
+           <div class="card">
+            <div class="card-header">
+              <div class="card-title"><i class="bi bi-calendar-check"></i>日期与验证</div>
+            </div>
+            <div class="card-body">
+              <div class="grid grid-cols-3">
+                <div>
+                  <label class="form-label">BS 日期单元格</label>
+                  <input id="date_cells_bs" class="form-control" placeholder="行,列 (从0开始)">
+                </div>
+                <div>
+                  <label class="form-label">PL 日期单元格</label>
+                  <input id="date_cells_pl" class="form-control" placeholder="行,列">
+                </div>
+                <div>
+                  <label class="form-label">CF 日期单元格</label>
+                  <input id="date_cells_cf" class="form-control" placeholder="行,列">
+                </div>
+                
+                <div>
+                  <label class="form-label">验证容差</label>
+                  <input id="validation_tolerance" class="form-control" placeholder="0.01">
+                </div>
+                
+                <div class="col-span-2 d-flex items-center gap-4 mt-4">
+                  <div class="d-flex items-center gap-2">
+                    <input id="generate_validation" type="checkbox">
+                    <label for="generate_validation" class="form-label" style="margin:0">生成验证报告</label>
+                  </div>
+                  <div class="d-flex items-center gap-2">
+                    <input id="generate_metrics" type="checkbox">
+                    <label for="generate_metrics" class="form-label" style="margin:0">生成财务指标</label>
+                  </div>
+                  <div class="d-flex items-center gap-2">
+                    <input id="exclude_output_files" type="checkbox">
+                    <label for="exclude_output_files" class="form-label" style="margin:0">排除输出文件</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Sidebar / Actions -->
+        <div>
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><i class="bi bi-lightning-charge"></i>快捷操作</div>
+            </div>
+            <div class="card-body">
+              <div class="grid">
                 <div class="d-flex gap-2">
-                  <button id="btnReloadCfg" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-clockwise me-1"></i>重新加载</button>
-                  <button id="btnSaveCfg" class="btn btn-outline-success btn-sm"><i class="bi bi-check2-circle me-1"></i>保存配置</button>
+                    <select id="presetSelect" class="form-select flex-1">
+                      <option value="">选择预设模式...</option>
+                      <option value="merge">合并报表</option>
+                      <option value="jingzhu">精铸</option>
+                      <option value="xincl">新材料</option>
+                      <option value="quick">快速模式</option>
+                      <option value="redengjingya">热等静压</option>
+                    </select>
+                    <button id="btnApplyPreset" class="btn btn-secondary">应用</button>
                 </div>
-              </div>
-              <div class="mini-kbd mt-2">
-                <div class="key"><i class="bi bi-1-circle me-1"></i>保存配置</div>
-                <div class="key"><i class="bi bi-2-circle me-1"></i>扫描文件</div>
-                <div class="key"><i class="bi bi-3-circle me-1"></i>开始运行</div>
-              </div>
-            </div>
-
-            <div class="accordion" id="settingsAccordion">
-              <div class="accordion-item mb-2">
-                <h2 class="accordion-header">
-                  <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#accPaths" aria-expanded="true">
-                    <i class="bi bi-folder2-open me-2"></i>路径与输出
-                  </button>
-                </h2>
-                <div id="accPaths" class="accordion-collapse collapse show" data-bs-parent="#settingsAccordion">
-                  <div class="accordion-body">
-                    <div class="row g-2">
-                      <div class="col-12">
-                        <label class="form-label">输入目录</label>
-                        <input id="input_dir" class="form-control" placeholder="例如：L:\Web\Financial data analysis">
-                        <div class="help">要扫描的 Excel 所在文件夹。</div>
-                      </div>
-                      <div class="col-12 col-lg-5">
-                        <label class="form-label">文件匹配</label>
-                        <input id="file_glob" class="form-control" placeholder="例如：*.xlsx">
-                        <div class="help">glob 匹配模式，例如 *.xlsx 或 *合并*.xlsx。</div>
-                      </div>
-                      <div class="col-12 col-lg-7">
-                        <label class="form-label">输出目录</label>
-                        <input id="output_dir" class="form-control" placeholder="例如：L:\Web\Financial data analysis">
-                        <div class="help">清洗结果输出的文件夹。</div>
-                      </div>
-                      <div class="col-12">
-                        <label class="form-label">输出文件名</label>
-                        <input id="output_basename" class="form-control" placeholder="例如：清洗后的AI标准财务表.xlsx">
-                        <div class="help">会自动生成 _验证报告.xlsx / _财务指标.xlsx。</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="accordion-item mb-2">
-                <h2 class="accordion-header">
-                  <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#accKeywords" aria-expanded="false">
-                    <i class="bi bi-funnel me-2"></i>识别关键字
-                  </button>
-                </h2>
-                <div id="accKeywords" class="accordion-collapse collapse" data-bs-parent="#settingsAccordion">
-                  <div class="accordion-body">
-                    <div class="row g-2">
-                      <div class="col-12 col-md-4">
-                        <label class="form-label">BS Sheet关键字</label>
-                        <input id="sheet_keyword_bs" class="form-control">
-                        <div class="help">包含即可，不区分大小写。</div>
-                      </div>
-                      <div class="col-12 col-md-4">
-                        <label class="form-label">PL Sheet关键字</label>
-                        <input id="sheet_keyword_pl" class="form-control">
-                        <div class="help">包含即可，不区分大小写。</div>
-                      </div>
-                      <div class="col-12 col-md-4">
-                        <label class="form-label">CF Sheet关键字</label>
-                        <input id="sheet_keyword_cf" class="form-control">
-                        <div class="help">包含即可，不区分大小写。</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="accordion-item mb-2">
-                <h2 class="accordion-header">
-                  <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#accHeaders" aria-expanded="false">
-                    <i class="bi bi-layout-text-window-reverse me-2"></i>表头定位
-                  </button>
-                </h2>
-                <div id="accHeaders" class="accordion-collapse collapse" data-bs-parent="#settingsAccordion">
-                  <div class="accordion-body">
-                    <div class="row g-2">
-                      <div class="col-12 col-md-4">
-                        <label class="form-label">BS 表头关键字</label>
-                        <input id="header_keyword_bs" class="form-control">
-                        <div class="help">整行包含关键字即可。</div>
-                      </div>
-                      <div class="col-12 col-md-4">
-                        <label class="form-label">PL 表头关键字</label>
-                        <input id="header_keyword_pl" class="form-control">
-                        <div class="help">整行包含关键字即可。</div>
-                      </div>
-                      <div class="col-12 col-md-4">
-                        <label class="form-label">CF 表头关键字</label>
-                        <input id="header_keyword_cf" class="form-control">
-                        <div class="help">整行包含关键字即可。</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="accordion-item">
-                <h2 class="accordion-header">
-                  <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#accDates" aria-expanded="false">
-                    <i class="bi bi-calendar2-event me-2"></i>日期与验证
-                  </button>
-                </h2>
-                <div id="accDates" class="accordion-collapse collapse" data-bs-parent="#settingsAccordion">
-                  <div class="accordion-body">
-                    <div class="row g-2">
-                      <div class="col-12 col-lg-4">
-                        <label class="form-label">BS 日期单元格</label>
-                        <input id="date_cells_bs" class="form-control" placeholder="例如：2,3;2,2">
-                        <div class="help">候选单元格（从0开始）。</div>
-                      </div>
-                      <div class="col-12 col-lg-4">
-                        <label class="form-label">PL 日期单元格</label>
-                        <input id="date_cells_pl" class="form-control" placeholder="例如：2,0;2,2">
-                        <div class="help">候选单元格（从0开始）。</div>
-                      </div>
-                      <div class="col-12 col-lg-4">
-                        <label class="form-label">CF 日期单元格</label>
-                        <input id="date_cells_cf" class="form-control" placeholder="例如：2,4;2,0">
-                        <div class="help">候选单元格（从0开始）。</div>
-                      </div>
-
-                      <div class="col-12 col-lg-4">
-                        <label class="form-label">验证容差</label>
-                        <input id="validation_tolerance" class="form-control" placeholder="0.01">
-                        <div class="help">资产=负债+权益允许的最大差额。</div>
-                      </div>
-                      <div class="col-12 col-lg-8">
-                        <div class="soft">
-                          <div class="row g-1">
-                            <div class="col-12 col-md-4">
-                              <div class="form-check form-switch">
-                                <input id="generate_validation" class="form-check-input" type="checkbox" role="switch">
-                                <label class="form-check-label" for="generate_validation">生成验证报告</label>
-                              </div>
-                            </div>
-                            <div class="col-12 col-md-4">
-                              <div class="form-check form-switch">
-                                <input id="generate_metrics" class="form-check-input" type="checkbox" role="switch">
-                                <label class="form-check-label" for="generate_metrics">生成财务指标</label>
-                              </div>
-                            </div>
-                            <div class="col-12 col-md-4">
-                              <div class="form-check form-switch">
-                                <input id="exclude_output_files" class="form-check-input" type="checkbox" role="switch">
-                                <label class="form-check-label" for="exclude_output_files">排除输出文件</label>
-                              </div>
-                            </div>
-                          </div>
-                          <div class="help mt-1">非日期会自动在附近搜索；保存配置后生效。</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        <div class="d-flex flex-column gap-3">
-          <div class="card">
-            <div class="card-body">
-              <div class="h6 mb-1 section-title"><i class="bi bi-lightning-charge me-1"></i>快捷操作</div>
-              <div class="help mb-2">推荐顺序：保存配置 → 扫描文件 → 开始运行。</div>
-              <div class="d-grid gap-2">
-                <button class="btn btn-outline-success" id="btnSaveCfg2"><i class="bi bi-check2-circle me-1"></i>保存配置</button>
-                <button class="btn btn-outline-primary" id="btnScan2"><i class="bi bi-search me-1"></i>扫描文件</button>
-                <button class="btn btn-primary" id="btnStart2"><i class="bi bi-play-fill me-1"></i>开始运行</button>
-                <button class="btn btn-outline-danger" id="btnStop2" disabled><i class="bi bi-stop-fill me-1"></i>停止</button>
+                
+                <button class="btn btn-primary w-full" id="btnSaveCfg2"><i class="bi bi-save"></i> 保存配置</button>
+                <button class="btn btn-secondary w-full" id="btnScan2"><i class="bi bi-search"></i> 扫描文件</button>
+                <button class="btn btn-accent w-full" id="btnStart2"><i class="bi bi-play-fill"></i> 开始运行</button>
+                <button class="btn btn-danger w-full" id="btnStop2" disabled><i class="bi bi-stop-fill"></i> 停止运行</button>
               </div>
             </div>
           </div>
-
+          
           <div class="card">
-            <div class="card-body">
-              <div class="d-flex align-items-center justify-content-between mb-2">
-                <div class="h6 mb-0 section-title"><i class="bi bi-files me-1"></i>文件预览</div>
-                <button class="btn btn-outline-secondary btn-sm" id="btnClearFiles"><i class="bi bi-x-lg me-1"></i>清空</button>
+            <div class="card-header">
+              <div class="card-title">
+                <i class="bi bi-file-earmark-text"></i>
+                文件预览
               </div>
-              <div class="help mb-2">最多显示 500 个文件名。</div>
-              <div id="filesPreview" class="mono small text-secondary files-preview"></div>
+              <button class="btn btn-secondary btn-sm" id="btnClearFiles">清空</button>
+            </div>
+            <div class="card-body" style="padding: 0;">
+               <div id="filesPreview" class="text-mono" style="padding: 1rem; max-height: 400px; overflow-y: auto; font-size: 0.85rem; color: var(--text-secondary); white-space: pre-wrap;"></div>
             </div>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- Query Tab -->
+    <div id="tab-query" class="tab-pane d-none">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-filter"></i>数据筛选</div>
+          <div class="d-flex gap-2">
+             <button id="btnReloadQueryOptions" class="btn btn-secondary btn-sm">刷新选项</button>
+             <button id="btnQuery" class="btn btn-primary btn-sm">执行查询</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-4">
+             <div class="form-group" style="grid-column: span 2;">
+               <label class="form-label">科目包含</label>
+               <input id="qSubject" class="form-control" placeholder="例如：未分配利润 / 银行存款">
+             </div>
+             <div>
+               <label class="form-label">金额范围 (最小)</label>
+               <input id="qMinAmount" class="form-control" placeholder="0">
+             </div>
+             <div>
+               <label class="form-label">金额范围 (最大)</label>
+               <input id="qMaxAmount" class="form-control" placeholder="1000000">
+             </div>
+             
+             <div>
+               <label class="form-label">源文件</label>
+               <select id="qSourceFile" class="form-select"></select>
+             </div>
+             <div>
+               <label class="form-label">日期</label>
+               <select id="qDate" class="form-select"></select>
+             </div>
+             <div>
+               <label class="form-label">报表类型</label>
+               <select id="qReportType" class="form-select"></select>
+             </div>
+             <div>
+               <label class="form-label">时间属性</label>
+               <select id="qTimeAttr" class="form-select"></select>
+             </div>
+          </div>
+          
+          <div class="d-flex justify-between items-center mt-4 pt-4" style="border-top: 1px solid var(--border-color)">
+             <div id="qMeta" class="text-mono" style="color: var(--text-secondary); font-size: 0.85rem;"></div>
+             <div class="d-flex gap-2">
+               <button id="btnQueryPrev" class="btn btn-secondary btn-sm">上一页</button>
+               <button id="btnQueryNext" class="btn btn-secondary btn-sm">下一页</button>
+             </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="table-container">
+        <table class="financial-table">
+          <thead id="cleanedHead"></thead>
+          <tbody id="cleanedBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Run Tab -->
     <div id="tab-run" class="tab-pane d-none">
-      <div class="row g-3">
-        <div class="col-12">
-          <div class="card">
-            <div class="card-body">
-              <div class="h5 mb-2 section-title"><i class="bi bi-rocket-takeoff me-1"></i>运行</div>
-              <div class="help mb-3">运行过程会把日志与进度实时推送到“日志”页。</div>
-              <div class="kpi">
-                <div class="item">
-                  <div class="label">状态</div>
-                  <div class="value" id="runStatusKpi">就绪</div>
-                </div>
-                <div class="item">
-                  <div class="label">当前进度</div>
-                  <div class="value" id="runProgressKpi">0/1</div>
-                </div>
-                <div class="item">
-                  <div class="label">当前文件</div>
-                  <div class="value mono" id="runFileKpi">-</div>
-                </div>
-              </div>
-              <div class="mt-3 d-flex flex-wrap gap-2">
-                <button class="btn btn-primary" id="btnStart3"><i class="bi bi-play-fill me-1"></i>开始运行</button>
-                <button class="btn btn-outline-danger" id="btnStop3" disabled><i class="bi bi-stop-fill me-1"></i>停止</button>
-              </div>
-            </div>
+      <div class="card" style="max-width: 800px; margin: 0 auto;">
+        <div class="card-body text-center" style="padding: 4rem 2rem;">
+          <div style="font-size: 3rem; color: var(--accent); margin-bottom: 1rem;">
+            <i class="bi bi-rocket-takeoff"></i>
+          </div>
+          <h2 style="font-weight: 600; margin-bottom: 0.5rem;">准备就绪</h2>
+          <p style="color: var(--text-secondary); margin-bottom: 2rem;">点击下方按钮开始处理财务数据。运行日志将实时显示。</p>
+          
+          <div class="grid grid-cols-3 gap-4 mb-4" style="max-width: 600px; margin: 0 auto 2rem auto;">
+             <div style="background: var(--bg-subtle); padding: 1rem; border-radius: var(--radius-md);">
+               <div style="font-size: 0.85rem; color: var(--text-secondary);">状态</div>
+               <div id="runStatusKpi" style="font-weight: 600; font-size: 1.1rem;">就绪</div>
+             </div>
+             <div style="background: var(--bg-subtle); padding: 1rem; border-radius: var(--radius-md);">
+               <div style="font-size: 0.85rem; color: var(--text-secondary);">进度</div>
+               <div id="runProgressKpi" style="font-weight: 600; font-size: 1.1rem;">0/1</div>
+             </div>
+             <div style="background: var(--bg-subtle); padding: 1rem; border-radius: var(--radius-md);">
+               <div style="font-size: 0.85rem; color: var(--text-secondary);">当前文件</div>
+               <div id="runFileKpi" class="text-mono" style="font-weight: 600; font-size: 1.1rem;">-</div>
+             </div>
+          </div>
+          
+          <div class="d-flex gap-2 justify-center" style="justify-content: center;">
+            <button class="btn btn-accent btn-lg" id="btnStart3" style="padding: 0.75rem 2rem;"><i class="bi bi-play-fill"></i> 开始运行</button>
+            <button class="btn btn-danger btn-lg" id="btnStop3" disabled style="padding: 0.75rem 2rem;"><i class="bi bi-stop-fill"></i> 停止</button>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- Logs Tab -->
     <div id="tab-logs" class="tab-pane d-none">
-      <div class="row g-3">
-        <div class="col-12">
-          <div class="card">
-            <div class="card-body">
-              <div class="d-flex align-items-center justify-content-between mb-2">
-                <div class="h5 mb-0 section-title"><i class="bi bi-journal-text me-1"></i>日志</div>
-                <div class="d-flex gap-2">
-                  <button class="btn btn-sm btn-outline-secondary" id="btnClearLogs"><i class="bi bi-trash me-1"></i>清空</button>
-                  <button class="btn btn-sm btn-outline-secondary" id="btnCopyLogs"><i class="bi bi-clipboard me-1"></i>复制</button>
-                </div>
-              </div>
-              <div id="logs" class="p-2 mono small"></div>
-            </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">系统日志</div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-secondary btn-sm" id="btnClearLogs"><i class="bi bi-trash"></i> 清空</button>
+            <button class="btn btn-secondary btn-sm" id="btnCopyLogs"><i class="bi bi-clipboard"></i> 复制</button>
           </div>
+        </div>
+        <div class="card-body" style="padding: 0;">
+          <div id="logs" class="log-container" style="border-radius: 0 0 var(--radius-lg) var(--radius-lg); border: none;"></div>
         </div>
       </div>
     </div>
 
+    <!-- Results Tab -->
     <div id="tab-results" class="tab-pane d-none">
-      <div class="row g-3">
-        <div class="col-12">
-          <div class="card">
-            <div class="card-body">
-              <div class="h5 mb-3 section-title"><i class="bi bi-table me-1"></i>结果</div>
-
-              <div class="row g-2 mb-3">
-                <div class="col-12">
-                  <div class="fw-semibold">清洗数据</div>
-                  <div class="d-flex gap-2 align-items-center">
-                    <div id="outCleaned" class="mono small text-secondary flex-grow-1"></div>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="openPath('cleaned')"><i class="bi bi-box-arrow-up-right me-1"></i>打开</button>
-                  </div>
-                </div>
-                <div class="col-12">
-                  <div class="fw-semibold">验证报告</div>
-                  <div class="d-flex gap-2 align-items-center">
-                    <div id="outValidation" class="mono small text-secondary flex-grow-1"></div>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="openPath('validation')"><i class="bi bi-box-arrow-up-right me-1"></i>打开</button>
-                  </div>
-                </div>
-                <div class="col-12">
-                  <div class="fw-semibold">财务指标</div>
-                  <div class="d-flex gap-2 align-items-center">
-                    <div id="outMetrics" class="mono small text-secondary flex-grow-1"></div>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="openPath('metrics')"><i class="bi bi-box-arrow-up-right me-1"></i>打开</button>
-                  </div>
-                </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">输出文件</div>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-3">
+            <div>
+              <div class="form-label">清洗数据</div>
+              <div class="d-flex gap-2 mt-1">
+                <div id="outCleaned" class="text-mono form-control flex-1" style="background: var(--bg-subtle); border: none; overflow: hidden; text-overflow: ellipsis;"></div>
+                <button class="btn btn-secondary" onclick="openPath('cleaned')">打开</button>
               </div>
-
-              <div class="fw-semibold mb-2">不平衡记录预览（最多200条）</div>
-              <div class="table-responsive">
-                <table class="table table-sm table-striped align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th>源文件</th>
-                      <th>来源Sheet</th>
-                      <th>日期</th>
-                      <th>时间属性</th>
-                      <th>差额</th>
-                      <th>验证结果</th>
-                    </tr>
-                  </thead>
-                  <tbody id="unbalancedBody"></tbody>
-                </table>
+            </div>
+            <div>
+              <div class="form-label">验证报告</div>
+              <div class="d-flex gap-2 mt-1">
+                <div id="outValidation" class="text-mono form-control flex-1" style="background: var(--bg-subtle); border: none; overflow: hidden; text-overflow: ellipsis;"></div>
+                <button class="btn btn-secondary" onclick="openPath('validation')">打开</button>
+              </div>
+            </div>
+            <div>
+              <div class="form-label">财务指标</div>
+              <div class="d-flex gap-2 mt-1">
+                <div id="outMetrics" class="text-mono form-control flex-1" style="background: var(--bg-subtle); border: none; overflow: hidden; text-overflow: ellipsis;"></div>
+                <button class="btn btn-secondary" onclick="openPath('metrics')">打开</button>
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+           <div class="card-title" style="color: var(--danger);">不平衡记录预览 (Top 200)</div>
+        </div>
+        <div class="table-container" style="border:none; box-shadow:none;">
+           <table class="financial-table">
+             <thead>
+               <tr>
+                 <th>源文件</th>
+                 <th>来源Sheet</th>
+                 <th>日期</th>
+                 <th>时间属性</th>
+                 <th>差额</th>
+                 <th>验证结果</th>
+               </tr>
+             </thead>
+             <tbody id="unbalancedBody"></tbody>
+           </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">验证报告明细</div></div>
+        <div class="table-container" style="border:none; box-shadow:none;">
+           <table class="financial-table">
+             <thead id="validationHead"></thead>
+             <tbody id="validationBody"></tbody>
+           </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">财务指标明细</div></div>
+        <div class="table-container" style="border:none; box-shadow:none;">
+           <table class="financial-table">
+             <thead id="metricsHead"></thead>
+             <tbody id="metricsBody"></tbody>
+           </table>
         </div>
       </div>
     </div>
 
   </div>
+  
+  <div style="display:none" id="hostInfo"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 let latestPaths = { cleaned: '', validation: '', metrics: '' };
 let es = null;
 let lastProgress = { current: 0, total: 1, detail: '' };
+let queryState = { offset: 0, limit: 200, total: 0 };
+
+const PRESETS = {
+  merge: { name: '合并', bs: 'BS-合并', pl: 'PL-合并', cf: 'CF-合并' },
+  jingzhu: { name: '精铸', bs: '精铸BS新', pl: '精铸PL新', cf: '精铸现金流量表' },
+  xincl: { name: '新材料', bs: '新材料BS新', pl: '新材料PL新', cf: '新材料现金流量表' },
+  quick: { name: '快速', bs: '快速BS新', pl: '快速PL新', cf: '快速现金流量表' },
+  redengjingya: { name: '热等静压', bs: '热等静压BS新', pl: '热等静压PL新', cf: '热等静压现金流量表' },
+};
 
 function showTab(id) {
-  for (const el of document.querySelectorAll('.tab-pane')) el.classList.add('d-none');
-  document.getElementById(id).classList.remove('d-none');
-  for (const b of document.querySelectorAll('#tabs .nav-link')) {
-    b.classList.toggle('active', b.getAttribute('data-tab') === id);
+  // Hide all panes
+  document.querySelectorAll('.tab-pane').forEach(el => el.classList.add('d-none'));
+  document.querySelectorAll('.tab-pane').forEach(el => el.style.display = 'none'); // Ensure display none
+  
+  // Show target pane
+  const target = document.getElementById(id);
+  if(target) {
+      target.classList.remove('d-none');
+      target.style.display = 'block';
   }
+  
+  // Update buttons
+  document.querySelectorAll('#tabs .nav-tab').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-tab') === id);
+  });
 }
 
 document.getElementById('tabs').addEventListener('click', (e) => {
@@ -373,15 +430,19 @@ document.getElementById('tabs').addEventListener('click', (e) => {
   showTab(btn.getAttribute('data-tab'));
 });
 
+// Initialize first tab
+showTab('tab-config');
+
 function setStatus(text) {
   document.getElementById('statusText').innerText = text || '';
-  document.getElementById('runStatusKpi').innerText = text || '';
+  const kpi = document.getElementById('runStatusKpi');
+  if(kpi) kpi.innerText = text || '';
 }
 
 function appendLog(line) {
   const logs = document.getElementById('logs');
   const div = document.createElement('div');
-  div.className = 'line';
+  div.className = 'log-line';
   div.innerText = line;
   logs.appendChild(div);
   logs.scrollTop = logs.scrollHeight;
@@ -391,10 +452,19 @@ function setProgress(current, total, detail) {
   const t = Math.max(1, parseInt(total || 1));
   const c = Math.max(0, parseInt(current || 0));
   const pct = Math.min(100, Math.max(0, Math.round((c / t) * 100)));
-  document.getElementById('progressBar').style.width = pct + '%';
-  document.getElementById('progressDetail').innerText = `${c}/${t} ${detail || ''}`.trim();
-  document.getElementById('runProgressKpi').innerText = `${c}/${t}`;
-  document.getElementById('runFileKpi').innerText = (detail || '-');
+  
+  const bar = document.getElementById('progressBar');
+  if(bar) bar.style.width = pct + '%';
+  
+  const det = document.getElementById('progressDetail');
+  if(det) det.innerText = `${c}/${t} ${detail || ''}`.trim();
+  
+  const kpiProg = document.getElementById('runProgressKpi');
+  if(kpiProg) kpiProg.innerText = `${c}/${t}`;
+  
+  const kpiFile = document.getElementById('runFileKpi');
+  if(kpiFile) kpiFile.innerText = (detail || '-');
+  
   lastProgress = { current: c, total: t, detail: detail || '' };
 }
 
@@ -458,10 +528,38 @@ function fillForm(cfg) {
   document.getElementById('validation_tolerance').value = (cfg.validation_tolerance != null ? cfg.validation_tolerance : 0.01);
 }
 
+function applyPresetToForm(presetKey) {
+  const p = PRESETS[presetKey];
+  if (!p) { setStatus('请选择预设'); return; }
+  document.getElementById('sheet_keyword_bs').value = p.bs;
+  document.getElementById('sheet_keyword_pl').value = p.pl;
+  document.getElementById('sheet_keyword_cf').value = p.cf;
+
+  const outEl = document.getElementById('output_basename');
+  const knownPrefixes = Object.values(PRESETS).map(x => x && x.name ? `${x.name}_` : '').filter(Boolean);
+  let base = (outEl.value || '').trim() || '清洗后的AI标准财务表.xlsx';
+  for (const pre of knownPrefixes) {
+    if (base.startsWith(pre)) {
+      base = base.slice(pre.length);
+      break;
+    }
+  }
+  outEl.value = `${p.name}_${base}`;
+  setStatus(`已套用预设：${p.name}`);
+}
+
 async function reloadCfg() {
   const resp = await fetch('/api/config');
   const data = await resp.json();
   fillForm(data);
+  
+  // 如果配置为空（即没有设置关键字），则默认加载“合并报表”预设
+  if (!data.sheet_keyword_bs && !data.sheet_keyword_pl && !data.sheet_keyword_cf) {
+    const sel = document.getElementById('presetSelect');
+    if (sel) sel.value = 'merge';
+    applyPresetToForm('merge');
+  }
+  
   setStatus('已加载配置');
 }
 
@@ -482,8 +580,8 @@ async function scanFiles() {
     box.innerText = '未找到匹配文件';
     return;
   }
-  const list = data.files.slice(0, 500).map(p => p.split(/[\\\\/]/).pop()).join('\\n');
-  box.innerText = data.files.length > 500 ? list + `\\n... 还有 ${data.files.length - 500} 个文件未显示` : list;
+  const list = data.files.slice(0, 500).map(p => p.split(/[\\\/]/).pop()).join('\n');
+  box.innerText = data.files.length > 500 ? list + `\n... 还有 ${data.files.length - 500} 个文件未显示` : list;
   setStatus(`扫描到 ${data.files.length} 个文件`);
 }
 
@@ -492,8 +590,7 @@ function setButtons(running) {
     const el = document.getElementById(id);
     if (el) el.disabled = !!disabled;
   };
-  setDisabled('btnStart', !!running);
-  setDisabled('btnStop', !running);
+  // Removed old btnStart/Stop, only 2 and 3 remain
   setDisabled('btnStart2', !!running);
   setDisabled('btnStop2', !running);
   setDisabled('btnStart3', !!running);
@@ -503,6 +600,10 @@ function setButtons(running) {
 async function startRun() {
   document.getElementById('logs').innerHTML = '';
   document.getElementById('unbalancedBody').innerHTML = '';
+  document.getElementById('validationHead').innerHTML = '';
+  document.getElementById('validationBody').innerHTML = '';
+  document.getElementById('metricsHead').innerHTML = '';
+  document.getElementById('metricsBody').innerHTML = '';
   document.getElementById('outCleaned').innerText = '';
   document.getElementById('outValidation').innerText = '';
   document.getElementById('outMetrics').innerText = '';
@@ -528,8 +629,52 @@ async function stopRun() {
 
 async function openPath(kind) {
   const path = (latestPaths[kind] || '').trim();
-  if (!path) return;
-  await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+  if (!path) { setStatus('没有可打开的路径'); return; }
+  try {
+    const resp = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+    const data = await resp.json();
+    if (data && data.ok) setStatus('已打开');
+    else setStatus((data && data.message) ? data.message : '打开失败');
+  } catch {
+    setStatus('打开失败');
+  }
+}
+
+function tryParseNumeric(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? { kind: 'number', n: v } : null;
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+  if (s === 'NaN' || s === 'Infinity' || s === '-Infinity') return null;
+  const s1 = s.replace(/,/g, '');
+  if (/^-?\d+(\.\d+)?%$/.test(s1)) return { kind: 'percent', n: Number(s1.slice(0, -1)) };
+  if (/^-?\d+(\.\d+)?$/.test(s1)) return { kind: 'number', n: Number(s1) };
+  return null;
+}
+
+function formatAccountingNumber(n) {
+  if (!Number.isFinite(n)) return '';
+  const nf = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (n < 0) return `(${nf.format(Math.abs(n))})`;
+  return nf.format(n);
+}
+
+function setCellTextWithFormat(td, raw) {
+  if (raw == null) { td.innerText = ''; return; }
+  const parsed = tryParseNumeric(raw);
+  if (parsed && parsed.kind === 'number' && Number.isFinite(parsed.n)) {
+    td.classList.add('num');
+    if (parsed.n < 0) td.classList.add('neg');
+    td.innerText = formatAccountingNumber(parsed.n);
+    return;
+  }
+  if (parsed && parsed.kind === 'percent' && Number.isFinite(parsed.n)) {
+    td.classList.add('num');
+    if (parsed.n < 0) td.classList.add('neg');
+    td.innerText = `${formatAccountingNumber(parsed.n)}%`;
+    return;
+  }
+  td.innerText = String(raw);
 }
 
 function renderUnbalanced(rows) {
@@ -538,14 +683,172 @@ function renderUnbalanced(rows) {
   if (!Array.isArray(rows)) return;
   for (const r of rows) {
     const tr = document.createElement('tr');
+    // Removed table-danger, use subtle coloring if needed
+    // tr.className = 'table-danger'; 
     const cols = ['源文件', '来源Sheet', '日期', '时间属性', '差额', '验证结果'];
     for (const c of cols) {
       const td = document.createElement('td');
-      td.innerText = (r && r[c] != null) ? String(r[c]) : '';
+      setCellTextWithFormat(td, (r && r[c] != null) ? r[c] : '');
+      if (c === '差额' || c === '验证结果') td.style.color = 'var(--danger)';
       tr.appendChild(td);
     }
     body.appendChild(tr);
   }
+}
+
+function buildColumns(rows, preferred) {
+  const cols = [];
+  const seen = new Set();
+  const add = (k) => {
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    cols.push(k);
+  };
+  for (const k of (preferred || [])) add(k);
+  for (const r of (rows || [])) {
+    if (!r) continue;
+    for (const k of Object.keys(r)) add(k);
+  }
+  return cols;
+}
+
+function renderTable(headEl, bodyEl, rows, preferredCols, rowClassFn) {
+  headEl.innerHTML = '';
+  bodyEl.innerHTML = '';
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  const cols = buildColumns(rows, preferredCols);
+  const trh = document.createElement('tr');
+  for (const c of cols) {
+    const th = document.createElement('th');
+    th.innerText = c;
+    trh.appendChild(th);
+  }
+  headEl.appendChild(trh);
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const cls = rowClassFn ? rowClassFn(r) : '';
+    if (cls) tr.className = cls;
+    for (const c of cols) {
+      const td = document.createElement('td');
+      setCellTextWithFormat(td, (r && r[c] != null) ? r[c] : '');
+      tr.appendChild(td);
+    }
+    bodyEl.appendChild(tr);
+  }
+}
+
+function renderValidation(rows) {
+  const head = document.getElementById('validationHead');
+  const body = document.getElementById('validationBody');
+  const preferred = ['源文件', '日期', '来源Sheet', '验证项目', '时间属性', '是否平衡', '差额', '验证结果'];
+  // Removed table-danger for cleaner look, maybe just color text?
+  renderTable(head, body, rows, preferred, (r) => (r && r['是否平衡'] === '否') ? 'row-danger' : '');
+}
+
+function renderMetrics(rows) {
+  const head = document.getElementById('metricsHead');
+  const body = document.getElementById('metricsBody');
+  const preferred = ['源文件', '日期'];
+  renderTable(head, body, rows, preferred, null);
+}
+
+function setSelectOptions(sel, values) {
+  sel.innerHTML = '';
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.innerText = '全部';
+  sel.appendChild(opt0);
+  for (const v of (values || [])) {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.innerText = v;
+    sel.appendChild(opt);
+  }
+}
+
+async function loadQueryOptions(force) {
+  try {
+    const resp = await fetch('/api/cleaned/options?force=' + (force ? '1' : '0'));
+    const data = await resp.json();
+    setSelectOptions(document.getElementById('qSourceFile'), data['源文件'] || []);
+    setSelectOptions(document.getElementById('qDate'), data['日期'] || []);
+    setSelectOptions(document.getElementById('qReportType'), data['报表类型'] || []);
+    setSelectOptions(document.getElementById('qTimeAttr'), data['时间属性'] || []);
+    document.getElementById('qMeta').innerText = `数据源：${(data.path || '').split(/[\\\\/]/).pop()} | 共 ${data.rows || 0} 行`;
+  } catch {
+    document.getElementById('qMeta').innerText = '未找到清洗表，请先运行生成';
+  }
+}
+
+function getQueryPayload() {
+  const numOrNull = (v) => {
+    const s = (v || '').trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    subject: document.getElementById('qSubject').value.trim(),
+    source_file: document.getElementById('qSourceFile').value,
+    date: document.getElementById('qDate').value,
+    report_type: document.getElementById('qReportType').value,
+    time_attr: document.getElementById('qTimeAttr').value,
+    min_amount: numOrNull(document.getElementById('qMinAmount').value),
+    max_amount: numOrNull(document.getElementById('qMaxAmount').value),
+    limit: queryState.limit,
+    offset: queryState.offset,
+  };
+}
+
+async function runQuery(resetOffset) {
+  if (resetOffset) queryState.offset = 0;
+  const p = getQueryPayload();
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(p)) {
+    if (v == null) continue;
+    if (typeof v === 'string' && v.trim() === '') continue;
+    qs.set(k, String(v));
+  }
+  try {
+    const resp = await fetch('/api/cleaned/query?' + qs.toString());
+    const data = await resp.json();
+    queryState.total = data.total || 0;
+    queryState.limit = data.limit || queryState.limit;
+    queryState.offset = data.offset || 0;
+    const meta = `命中 ${queryState.total} 行 | 当前 ${queryState.offset + 1}-${Math.min(queryState.offset + queryState.limit, queryState.total)}`;
+    document.getElementById('qMeta').innerText = `数据源：${(data.path || '').split(/[\\\\/]/).pop()} | ${meta}`;
+    const preferred = ['源文件', '日期', '报表类型', '大类', '科目', '时间属性', '金额', '来源Sheet'];
+    renderTable(document.getElementById('cleanedHead'), document.getElementById('cleanedBody'), data.rows || [], preferred, null);
+  } catch {
+    setStatus('查询失败（请先运行生成清洗表）');
+  }
+}
+
+function applyResult(res) {
+  if (!res) return;
+  latestPaths.cleaned = res.cleaned_path || '';
+  latestPaths.validation = res.validation_path || '';
+  latestPaths.metrics = res.metrics_path || '';
+  document.getElementById('outCleaned').innerText = latestPaths.cleaned;
+  document.getElementById('outValidation').innerText = latestPaths.validation;
+  document.getElementById('outMetrics').innerText = latestPaths.metrics;
+  renderUnbalanced(res.unbalanced_preview || []);
+  renderValidation(res.validation_preview || []);
+  renderMetrics(res.metrics_preview || []);
+}
+
+async function refreshStatusOnce() {
+  try {
+    const resp = await fetch('/api/run/status');
+    const data = await resp.json();
+    const running = !!(data && data.running);
+    const prog = (data && data.progress) ? data.progress : {};
+    setButtons(running);
+    if (prog && (prog.current != null || prog.total != null || prog.detail != null)) {
+      setProgress(prog.current, prog.total, prog.detail);
+    }
+    if (data && data.result) applyResult(data.result);
+  } catch {}
 }
 
 function connectStream() {
@@ -566,17 +869,11 @@ function connectStream() {
     try {
       const d = JSON.parse(e.data);
       const res = d.result || {};
-      latestPaths.cleaned = res.cleaned_path || '';
-      latestPaths.validation = res.validation_path || '';
-      latestPaths.metrics = res.metrics_path || '';
-      document.getElementById('outCleaned').innerText = latestPaths.cleaned;
-      document.getElementById('outValidation').innerText = latestPaths.validation;
-      document.getElementById('outMetrics').innerText = latestPaths.metrics;
-      renderUnbalanced(res.unbalanced_preview || []);
+      applyResult(res);
       if (res.cancelled) setStatus('已取消');
       else if (res.errors && res.errors.length) setStatus('完成（有错误）');
       else setStatus('完成');
-    } catch {}
+    } catch { appendLog('done事件解析失败'); }
     setButtons(false);
     showTab('tab-results');
   });
@@ -591,12 +888,9 @@ const bind = (id, handler) => {
 bind('btnReloadCfg', reloadCfg);
 bind('btnSaveCfg', saveCfg);
 bind('btnSaveCfg2', saveCfg);
-bind('btnScan', scanFiles);
 bind('btnScan2', scanFiles);
-bind('btnStart', startRun);
 bind('btnStart2', startRun);
 bind('btnStart3', startRun);
-bind('btnStop', stopRun);
 bind('btnStop2', stopRun);
 bind('btnStop3', stopRun);
 bind('btnClearFiles', () => {
@@ -606,12 +900,24 @@ bind('btnClearFiles', () => {
 });
 bind('btnClearLogs', () => document.getElementById('logs').innerHTML = '');
 bind('btnCopyLogs', async () => {
-  const lines = Array.from(document.querySelectorAll('#logs .line')).map(x => x.innerText).join('\\n');
+  const lines = Array.from(document.querySelectorAll('#logs .log-line')).map(x => x.innerText).join('\n');
   try { await navigator.clipboard.writeText(lines); setStatus('已复制日志'); } catch { setStatus('复制失败'); }
 });
 
+bind('btnApplyPreset', async () => {
+  const key = document.getElementById('presetSelect').value;
+  applyPresetToForm(key);
+  await saveCfg();
+});
+
+bind('btnReloadQueryOptions', () => loadQueryOptions(true));
+bind('btnQuery', () => runQuery(true));
+bind('btnQueryPrev', () => { queryState.offset = Math.max(0, queryState.offset - queryState.limit); runQuery(false); });
+bind('btnQueryNext', () => { queryState.offset = queryState.offset + queryState.limit; runQuery(false); });
+
 document.getElementById('hostInfo').innerText = window.location.host;
-reloadCfg().then(() => connectStream());
+reloadCfg().then(() => { refreshStatusOnce(); connectStream(); setInterval(refreshStatusOnce, 2000); });
+loadQueryOptions(false);
 </script>
 </body>
 </html>

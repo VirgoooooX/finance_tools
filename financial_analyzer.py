@@ -15,15 +15,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-browser", action="store_true", help="启动Web时不自动打开浏览器")
     args = parser.parse_args(argv)
 
-    if args.ui:
-        from financial_analyzer_core import DEFAULT_CONFIG_PATH
-        from financial_analyzer_desktop import FinancialAnalyzerUI
-
-        app = FinancialAnalyzerUI(config_path=args.config or DEFAULT_CONFIG_PATH)
-        app.run()
-        return 0
-
-    if args.web:
+    # 如果没有提供任何模式参数（--ui 或 --web 或 --config 等 CLI 参数），默认启动 web
+    import sys
+    is_interactive = len(sys.argv) == 1
+    
+    if args.web or is_interactive:
         from financial_analyzer_core import DEFAULT_CONFIG_PATH
         from financial_analyzer_web import run_web
 
@@ -34,8 +30,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             open_browser=not bool(args.no_browser),
         )
 
-    from financial_analyzer_core import DEFAULT_CONFIG_PATH
-    from financial_analyzer_cli import main as cli_main
+    if args.ui:
+        from financial_analyzer_core import DEFAULT_CONFIG_PATH
+        from financial_analyzer_desktop import FinancialAnalyzerUI
+
+        app = FinancialAnalyzerUI(config_path=args.config or DEFAULT_CONFIG_PATH)
+        app.run()
+        return 0
+
+    from financial_analyzer_core import DEFAULT_CONFIG_PATH, main as cli_main
 
     cli_argv: List[str] = ["--config", (args.config or DEFAULT_CONFIG_PATH)]
     if args.input_dir:

@@ -1,9 +1,22 @@
 import os
+import sys
 import queue
 import threading
 import logging
 from dataclasses import asdict
 from typing import Optional, Any, Dict, List
+from pathlib import Path
+
+import pandas as pd
+
+def get_resource_path(relative_path: str) -> Path:
+    """获取资源文件的绝对路径，兼容开发环境和 PyInstaller 打包环境"""
+    try:
+        # PyInstaller 打包后的临时目录
+        base_path = Path(sys._MEIPASS)
+    except Exception:
+        base_path = Path(__file__).resolve().parent
+    return base_path / relative_path
 
 from financial_analyzer_core import (
     OUTPUT_PATH,
@@ -70,6 +83,7 @@ class _WebRunner:
         self.running = False
         self.current_progress: Dict[str, Any] = {"current": 0, "total": 1, "detail": ""}
         self._lock = threading.Lock()
+        self._cleaned_cache: Dict[str, Any] = {"path": None, "mtime": None, "df": None}
 
     def set_config(self, data: Dict[str, Any]) -> AppConfig:
         cfg = AppConfig()
@@ -150,12 +164,42 @@ class _WebRunner:
                 "result": res,
             }
 
+    def _get_cleaned_path(self) -> str:
+        with self._lock:
+            res = self.last_result
+            cfg = self.cfg
+        if res and getattr(res, "cleaned_path", None):
+            return str(res.cleaned_path or "")
+        return os.path.abspath(os.path.join(cfg.output_dir, cfg.output_basename))
+
+    def load_cleaned_df(self, force_reload: bool = False) -> pd.DataFrame:
+        path = self._get_cleaned_path()
+        if not path or not os.path.exists(path):
+            raise FileNotFoundError("清洗后的AI标准财务表不存在，请先运行生成")
+
+        mtime = None
+        try:
+            mtime = float(os.path.getmtime(path))
+        except Exception:
+            mtime = None
+
+        with self._lock:
+            cache_path = self._cleaned_cache.get("path")
+            cache_mtime = self._cleaned_cache.get("mtime")
+            cache_df = self._cleaned_cache.get("df")
+
+        if not force_reload and cache_df is not None and cache_path == path and cache_mtime == mtime:
+            return cache_df
+
+        df = pd.read_excel(path)
+        with self._lock:
+            self._cleaned_cache = {"path": path, "mtime": mtime, "df": df}
+        return df
+
 
 def _web_index_html() -> str:
     try:
-        from pathlib import Path
-
-        p = Path(__file__).resolve().parent / "web" / "index.html"
+        p = get_resource_path("web/index.html")
         return p.read_text(encoding="utf-8")
     except Exception:
         return "<!doctype html><html><head><meta charset='utf-8'><title>Web</title></head><body>缺少 web/index.html</body></html>"
@@ -172,10 +216,45 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     runner = _WebRunner(config_path=config_path)
     app = FastAPI()
-    try:
-        from pathlib import Path
 
-        web_dir = Path(__file__).resolve().parent / "web"
+    def _sanitize_json(obj: Any) -> Any:
+        import math as _math
+        import datetime as _dt
+
+        if obj is None:
+            return None
+        try:
+            if pd.isna(obj):
+                return None
+        except Exception:
+            pass
+
+        if isinstance(obj, float):
+            try:
+                if _math.isnan(obj) or _math.isinf(obj):
+                    return None
+            except Exception:
+                return None
+            return obj
+        if isinstance(obj, (str, int, bool)):
+            return obj
+        if isinstance(obj, (_dt.datetime, _dt.date, pd.Timestamp)):
+            return str(obj)
+        if isinstance(obj, list):
+            return [_sanitize_json(x) for x in obj]
+        if isinstance(obj, tuple):
+            return [_sanitize_json(x) for x in obj]
+        if isinstance(obj, dict):
+            return {str(k): _sanitize_json(v) for k, v in obj.items()}
+        try:
+            item = getattr(obj, "item", None)
+            if callable(item):
+                return _sanitize_json(item())
+        except Exception:
+            pass
+        return str(obj)
+    try:
+        web_dir = get_resource_path("web")
         app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
     except Exception:
         pass
@@ -212,6 +291,89 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     def api_status() -> Dict[str, Any]:
         return runner.get_status()
 
+    @app.get("/api/cleaned/options")
+    def api_cleaned_options(force: int = 0) -> Dict[str, Any]:
+        try:
+            df = runner.load_cleaned_df(force_reload=bool(int(force or 0)))
+        except Exception as e:
+            return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(), "rows": 0}
+
+        opts: Dict[str, Any] = {"ok": True}
+        for col in ["源文件", "日期", "报表类型", "大类", "时间属性"]:
+            if col in df.columns:
+                try:
+                    vals = df[col].dropna().astype(str).unique().tolist()
+                except Exception:
+                    vals = []
+                vals = [v for v in vals if str(v).strip() != ""]
+                vals.sort()
+                opts[col] = vals[:500]
+        opts["path"] = runner._get_cleaned_path()
+        opts["rows"] = int(len(df))
+        return _sanitize_json(opts)
+
+    @app.get("/api/cleaned/query")
+    def api_cleaned_query(
+        q: str = "",
+        subject: str = "",
+        source_file: str = "",
+        date: str = "",
+        report_type: str = "",
+        category: str = "",
+        time_attr: str = "",
+        min_amount: Optional[float] = None,
+        max_amount: Optional[float] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        try:
+            df = runner.load_cleaned_df(force_reload=False)
+        except Exception as e:
+            return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(), "total": 0, "limit": 0, "offset": 0, "rows": []}
+        view = df
+
+        def _filt_eq(col: str, val: str) -> None:
+            nonlocal view
+            if not val:
+                return
+            if col in view.columns:
+                view = view[view[col].astype(str) == str(val)]
+
+        _filt_eq("源文件", source_file)
+        _filt_eq("日期", date)
+        _filt_eq("报表类型", report_type)
+        _filt_eq("大类", category)
+        _filt_eq("时间属性", time_attr)
+
+        kw = (subject or q or "").strip()
+        if kw and "科目" in view.columns:
+            view = view[view["科目"].astype(str).str.contains(kw, case=False, na=False)]
+
+        if min_amount is not None and "金额" in view.columns:
+            try:
+                view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) >= float(min_amount)]
+            except Exception:
+                pass
+        if max_amount is not None and "金额" in view.columns:
+            try:
+                view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) <= float(max_amount)]
+            except Exception:
+                pass
+
+        total = int(len(view))
+        lim = int(max(1, min(int(limit or 200), 2000)))
+        off = int(max(0, int(offset or 0)))
+        page = view.iloc[off : off + lim].copy()
+        records = page.to_dict(orient="records")
+        return _sanitize_json({
+            "ok": True,
+            "path": runner._get_cleaned_path(),
+            "total": total,
+            "limit": lim,
+            "offset": off,
+            "rows": records,
+        })
+
     @app.post("/api/open")
     def api_open(payload: Dict[str, Any]) -> Dict[str, Any]:
         path = str((payload or {}).get("path", "")).strip()
@@ -230,7 +392,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         q = runner.hub.subscribe()
 
         def encode(event: str, data_obj: Any) -> str:
-            s = _json.dumps(data_obj, ensure_ascii=False)
+            s = _json.dumps(_sanitize_json(data_obj), ensure_ascii=False, allow_nan=False)
             return f"event: {event}\ndata: {s}\n\n"
 
         def gen():

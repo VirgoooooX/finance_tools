@@ -6,13 +6,24 @@ import os
 import json
 import logging
 import threading
+import argparse
 from dataclasses import dataclass, asdict, field
 from typing import Callable, Optional, Any, Dict, List, Tuple
 
 
 OUTPUT_PATH = "清洗后的AI标准财务表.xlsx"
 
-DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "financial_analyzer_config.json")
+import sys
+
+def get_base_dir():
+    """获取程序运行的基础目录，兼容开发环境和 PyInstaller 打包环境"""
+    if hasattr(sys, '_MEIPASS'):
+        # 打包环境：返回 .exe 所在的目录（或者根据需要返回 sys._MEIPASS）
+        # 通常配置文件应该放在 .exe 旁边，而不是临时目录里
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+DEFAULT_CONFIG_PATH = os.path.join(get_base_dir(), "financial_analyzer_config.json")
 
 
 @dataclass
@@ -24,9 +35,9 @@ class AppConfig:
     generate_validation: bool = True
     generate_metrics: bool = True
     exclude_output_files: bool = True
-    sheet_keyword_bs: str = "BS"
-    sheet_keyword_pl: str = "PL"
-    sheet_keyword_cf: str = "CF"
+    sheet_keyword_bs: str = "BS-合并"
+    sheet_keyword_pl: str = "PL-合并"
+    sheet_keyword_cf: str = "CF-合并"
     header_keyword_bs: str = "期末余额"
     header_keyword_pl: str = "本年累计"
     header_keyword_cf: str = "本期金额"
@@ -50,6 +61,8 @@ class AnalysisResult:
     validation_path: Optional[str] = None
     metrics_path: Optional[str] = None
     unbalanced_preview: List[Dict[str, Any]] = field(default_factory=list)
+    validation_preview: List[Dict[str, Any]] = field(default_factory=list)
+    metrics_preview: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def _ensure_dir(path: str) -> None:
@@ -97,6 +110,34 @@ def _get_logger(name: str = "financial_analyzer", handler: Optional[logging.Hand
         handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%H:%M:%S"))
     logger.addHandler(handler)
     return logger
+
+
+def _json_safe_value(v: Any) -> Any:
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except Exception:
+        pass
+    if isinstance(v, (datetime.datetime, datetime.date, pd.Timestamp)):
+        return str(v)
+    try:
+        item = getattr(v, "item", None)
+        if callable(item):
+            return item()
+    except Exception:
+        pass
+    return v
+
+
+def _df_preview_records(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
+    if df is None or df.empty:
+        return []
+    df2 = df.head(int(limit)).copy()
+    for c in df2.columns:
+        df2[c] = df2[c].map(_json_safe_value)
+    return df2.to_dict(orient="records")
 
 
 def _is_date_like(date_val: Any) -> bool:
@@ -335,7 +376,14 @@ def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         return pd.DataFrame()
 
 
-def extract_amount(df, keywords, sheet_type=None, time_attr=None, category=None):
+def _normalize_subject_text(text: Any) -> str:
+    s = str(text or "").strip().lower()
+    s = s.replace("（", "(").replace("）", ")")
+    s = re.sub(r"[\s,，]", "", s)
+    return s
+
+
+def extract_amount_info(df, keywords, sheet_type=None, time_attr=None, category=None) -> Tuple[float, bool, str]:
     filtered_df = df.copy()
     if sheet_type:
         filtered_df = filtered_df[filtered_df["报表类型"] == sheet_type]
@@ -343,41 +391,83 @@ def extract_amount(df, keywords, sheet_type=None, time_attr=None, category=None)
         filtered_df = filtered_df[filtered_df["时间属性"] == time_attr]
     if category:
         filtered_df = filtered_df[filtered_df["大类"] == category]
+
+    if filtered_df.empty or "科目" not in filtered_df.columns or "金额" not in filtered_df.columns:
+        return 0.0, False, ""
+
+    subjects_norm = filtered_df["科目"].astype(str).map(_normalize_subject_text)
+
     for keyword in keywords:
-        matched = filtered_df[filtered_df["科目"].str.strip().str.lower() == keyword.lower()]
-        if not matched.empty:
-            return matched.iloc[0]["金额"]
-    return 0
+        kw_norm = _normalize_subject_text(keyword)
+        if not kw_norm:
+            continue
+
+        exact_mask = subjects_norm == kw_norm
+        if exact_mask.any():
+            row = filtered_df.loc[exact_mask].iloc[0]
+            return float(row["金额"]), True, str(row["科目"])
+
+        contain_mask = subjects_norm.str.contains(re.escape(kw_norm), na=False)
+        if contain_mask.any():
+            candidates = filtered_df.loc[contain_mask, ["科目", "金额"]].copy()
+            candidates["__len"] = candidates["科目"].astype(str).map(lambda x: len(_normalize_subject_text(x)))
+            candidates = candidates.sort_values("__len", ascending=True)
+            row = candidates.iloc[0]
+            return float(row["金额"]), True, str(row["科目"])
+
+    return 0.0, False, ""
+
+
+def extract_amount(df, keywords, sheet_type=None, time_attr=None, category=None):
+    val, found, _ = extract_amount_info(df, keywords, sheet_type=sheet_type, time_attr=time_attr, category=category)
+    return val if found else 0.0
 
 
 def validate_balance_sheet(
     df_group,
     tolerance: float = 0.01,
+    time_attr: str = "期末余额",
     assets_keywords: Optional[List[str]] = None,
     liabilities_keywords: Optional[List[str]] = None,
     equity_keywords: Optional[List[str]] = None,
 ):
-    assets = extract_amount(
+    assets, assets_found, _ = extract_amount_info(
         df_group,
         assets_keywords or ["资产总计", "资产总额", "资产合计"],
         sheet_type="资产负债表",
+        time_attr=time_attr,
         category="资产",
     )
-    liabilities = extract_amount(
+    liabilities, liabilities_found, _ = extract_amount_info(
         df_group,
         liabilities_keywords or ["负债合计", "负债总计", "负债总额"],
         sheet_type="资产负债表",
+        time_attr=time_attr,
         category="负债及权益",
     )
-    equity = extract_amount(
+    equity, equity_found, _ = extract_amount_info(
         df_group,
-        equity_keywords or ["所有者权益合计", "股东权益合计", "所有者权益总计", "权益合计"],
+        equity_keywords or ["所有者权益合计", "股东权益合计", "所有者权益总计", "权益合计", "所有者权益（或股东权益）合计"],
         sheet_type="资产负债表",
+        time_attr=time_attr,
         category="负债及权益",
     )
+    if not (assets_found and liabilities_found and equity_found):
+        return {
+            "验证项目": "BS表资产=负债+权益验证",
+            "时间属性": time_attr,
+            "资产总计": assets,
+            "负债合计": liabilities,
+            "所有者权益合计": equity,
+            "差额": None,
+            "是否平衡": "否",
+            "验证结果": "数据缺失",
+        }
     diff = abs(assets - (liabilities + equity))
     is_balanced = diff <= tolerance
     return {
+        "验证项目": "BS表资产=负债+权益验证",
+        "时间属性": time_attr,
         "资产总计": assets,
         "负债合计": liabilities,
         "所有者权益合计": equity,
@@ -387,37 +477,207 @@ def validate_balance_sheet(
     }
 
 
+def validate_bs_pl_balance(df_group, tolerance: float = 0.01) -> Dict[str, Any]:
+    re_begin, re_begin_found, _ = extract_amount_info(
+        df_group,
+        ["未分配利润"],
+        sheet_type="资产负债表",
+        time_attr="年初余额",
+        category="负债及权益",
+    )
+    re_end, re_end_found, _ = extract_amount_info(
+        df_group,
+        ["未分配利润"],
+        sheet_type="资产负债表",
+        time_attr="期末余额",
+        category="负债及权益",
+    )
+    np, np_found, _ = extract_amount_info(
+        df_group,
+        ["归属于母公司所有者的净利润", "归属于母公司股东的净利润"],
+        sheet_type="利润表",
+        time_attr="本年累计金额",
+    )
+    if not (re_begin_found and re_end_found and np_found):
+        return {
+            "验证项目": "BS表与PL表平衡验证",
+            "时间属性": "年初/期末 vs 本年累计",
+            "未分配利润期初余额": re_begin,
+            "未分配利润期末余额": re_end,
+            "归属于母公司所有者的净利润本年累计": np,
+            "差额": None,
+            "是否平衡": "否",
+            "验证结果": "数据缺失",
+        }
+    diff_val = (re_end - re_begin) - np
+    diff = abs(diff_val)
+    is_balanced = diff <= tolerance
+    return {
+        "验证项目": "BS表与PL表平衡验证",
+        "时间属性": "年初/期末 vs 本年累计",
+        "未分配利润期初余额": re_begin,
+        "未分配利润期末余额": re_end,
+        "归属于母公司所有者的净利润本年累计": np,
+        "差额": diff,
+        "是否平衡": "是" if is_balanced else "否",
+        "验证结果": "通过" if is_balanced else f"不平衡(差额:{diff:.2f})",
+    }
+
+
+def validate_bs_cf_balance(df_group, tolerance: float = 0.01) -> Dict[str, Any]:
+    bank_end, bank_found, _ = extract_amount_info(
+        df_group,
+        ["银行存款"],
+        sheet_type="资产负债表",
+        time_attr="期末余额",
+        category="资产",
+    )
+    cf_end, cf_found, _ = extract_amount_info(
+        df_group,
+        ["期末现金及现金等价物余额", "期末现金及现金等价物余额(附注)", "期末现金及现金等价物余额（附注）"],
+        sheet_type="现金流量表",
+        time_attr="本年累计金额",
+    )
+    if not (bank_found and cf_found):
+        return {
+            "验证项目": "BS表与CF表平衡验证",
+            "时间属性": "期末余额 vs 本年累计",
+            "银行存款期末余额": bank_end,
+            "期末现金及现金等价物余额本年累计": cf_end,
+            "差额": None,
+            "是否平衡": "否",
+            "验证结果": "数据缺失",
+        }
+    diff_val = bank_end - cf_end
+    diff = abs(diff_val)
+    is_balanced = diff <= tolerance
+    return {
+        "验证项目": "BS表与CF表平衡验证",
+        "时间属性": "期末余额 vs 本年累计",
+        "银行存款期末余额": bank_end,
+        "期末现金及现金等价物余额本年累计": cf_end,
+        "差额": diff,
+        "是否平衡": "是" if is_balanced else "否",
+        "验证结果": "通过" if is_balanced else f"不平衡(差额:{diff:.2f})",
+    }
+
+
+def _format_percent(val: Optional[float]) -> Optional[str]:
+    if val is None:
+        return None
+    try:
+        return f"{float(val) * 100:.2f}%"
+    except Exception:
+        return None
+
+
+def _round_number(val: Optional[float], digits: int = 2) -> Optional[float]:
+    if val is None:
+        return None
+    try:
+        return round(float(val), int(digits))
+    except Exception:
+        return None
+
+
+def _safe_div(n: float, d: float) -> Optional[float]:
+    if d == 0:
+        return None
+    return n / d
+
+
 def calculate_financial_metrics(df_group):
     metrics = {}
-    assets_total = extract_amount(df_group, ["资产总计", "资产总额"], sheet_type="资产负债表")
-    current_assets = extract_amount(df_group, ["流动资产合计", "流动资产总计"], sheet_type="资产负债表")
-    cash = extract_amount(df_group, ["货币资金", "现金及现金等价物"], sheet_type="资产负债表")
-    inventory = extract_amount(df_group, ["存货"], sheet_type="资产负债表")
-    liabilities_total = extract_amount(df_group, ["负债合计", "负债总计"], sheet_type="资产负债表")
-    current_liabilities = extract_amount(df_group, ["流动负债合计", "流动负债总计"], sheet_type="资产负债表")
-    equity_total = extract_amount(df_group, ["所有者权益合计", "股东权益合计", "权益合计"], sheet_type="资产负债表")
-    revenue = extract_amount(df_group, ["营业收入", "主营业务收入"], sheet_type="利润表")
-    cost = extract_amount(df_group, ["营业成本", "主营业务成本"], sheet_type="利润表")
-    operating_profit = extract_amount(df_group, ["营业利润"], sheet_type="利润表")
-    net_profit = extract_amount(df_group, ["净利润"], sheet_type="利润表")
-    operating_cf = extract_amount(df_group, ["经营活动产生的现金流量净额", "经营活动现金流量净额"], sheet_type="现金流量表")
-    investing_cf = extract_amount(df_group, ["投资活动产生的现金流量净额", "投资活动现金流量净额"], sheet_type="现金流量表")
-    financing_cf = extract_amount(df_group, ["筹资活动产生的现金流量净额", "筹资活动现金流量净额"], sheet_type="现金流量表")
-    metrics["流动比率"] = current_assets / current_liabilities if current_liabilities != 0 else None
-    metrics["速动比率"] = (current_assets - inventory) / current_liabilities if current_liabilities != 0 else None
-    metrics["现金比率"] = cash / current_liabilities if current_liabilities != 0 else None
-    metrics["资产负债率"] = liabilities_total / assets_total if assets_total != 0 else None
-    metrics["产权比率"] = liabilities_total / equity_total if equity_total != 0 else None
-    metrics["权益乘数"] = assets_total / equity_total if equity_total != 0 else None
-    metrics["毛利率"] = (revenue - cost) / revenue if revenue != 0 else None
-    metrics["营业利润率"] = operating_profit / revenue if revenue != 0 else None
-    metrics["净利率"] = net_profit / revenue if revenue != 0 else None
-    metrics["ROE(净资产收益率)"] = net_profit / equity_total if equity_total != 0 else None
-    metrics["ROA(总资产收益率)"] = net_profit / assets_total if assets_total != 0 else None
-    metrics["经营活动现金流净额"] = operating_cf
-    metrics["投资活动现金流净额"] = investing_cf
-    metrics["筹资活动现金流净额"] = financing_cf
-    metrics["现金流量比率"] = operating_cf / current_liabilities if current_liabilities != 0 else None
+    assets_total_end = extract_amount(df_group, ["资产总计", "资产总额", "资产合计"], sheet_type="资产负债表", time_attr="期末余额")
+    current_assets_end = extract_amount(
+        df_group, ["流动资产合计", "流动资产总计"], sheet_type="资产负债表", time_attr="期末余额"
+    )
+    cash_end = extract_amount(df_group, ["货币资金", "现金及现金等价物"], sheet_type="资产负债表", time_attr="期末余额")
+    inventory_begin = extract_amount(df_group, ["存货"], sheet_type="资产负债表", time_attr="年初余额")
+    inventory_end = extract_amount(df_group, ["存货"], sheet_type="资产负债表", time_attr="期末余额")
+    ar_begin = extract_amount(df_group, ["应收账款", "应收帐款"], sheet_type="资产负债表", time_attr="年初余额")
+    ar_end = extract_amount(df_group, ["应收账款", "应收帐款"], sheet_type="资产负债表", time_attr="期末余额")
+    liabilities_total_end = extract_amount(
+        df_group, ["负债合计", "负债总计", "负债总额"], sheet_type="资产负债表", time_attr="期末余额"
+    )
+    current_liabilities_end = extract_amount(
+        df_group, ["流动负债合计", "流动负债总计"], sheet_type="资产负债表", time_attr="期末余额"
+    )
+    equity_total_end = extract_amount(
+        df_group, ["所有者权益合计", "股东权益合计", "权益合计"], sheet_type="资产负债表", time_attr="期末余额"
+    )
+
+    revenue_m = extract_amount(df_group, ["营业收入", "主营业务收入"], sheet_type="利润表", time_attr="本期金额")
+    revenue_ytd = extract_amount(df_group, ["营业收入", "主营业务收入"], sheet_type="利润表", time_attr="本年累计金额")
+    main_revenue_ytd = extract_amount(df_group, ["主营业务收入"], sheet_type="利润表", time_attr="本年累计金额")
+    cost_ytd = extract_amount(df_group, ["营业成本", "主营业务成本"], sheet_type="利润表", time_attr="本年累计金额")
+    operating_profit_ytd = extract_amount(df_group, ["营业利润"], sheet_type="利润表", time_attr="本年累计金额")
+    net_profit_ytd = extract_amount(df_group, ["净利润"], sheet_type="利润表", time_attr="本年累计金额")
+    rd_m = extract_amount(df_group, ["研发费用"], sheet_type="利润表", time_attr="本期金额")
+    rd_ytd = extract_amount(df_group, ["研发费用"], sheet_type="利润表", time_attr="本年累计金额")
+
+    operating_cf_ytd = extract_amount(
+        df_group, ["经营活动产生的现金流量净额", "经营活动现金流量净额"], sheet_type="现金流量表", time_attr="本年累计金额"
+    )
+    investing_cf_ytd = extract_amount(
+        df_group, ["投资活动产生的现金流量净额", "投资活动现金流量净额"], sheet_type="现金流量表", time_attr="本年累计金额"
+    )
+    financing_cf_ytd = extract_amount(
+        df_group, ["筹资活动产生的现金流量净额", "筹资活动现金流量净额"], sheet_type="现金流量表", time_attr="本年累计金额"
+    )
+
+    ratio_keys = {
+        "流动比率",
+        "速动比率",
+        "现金比率",
+        "资产负债率",
+        "产权比率",
+        "权益乘数",
+        "毛利率",
+        "营业利润率",
+        "净利率",
+        "ROE(净资产收益率)",
+        "ROA(总资产收益率)",
+        "现金流量比率",
+        "当月研发投入强度",
+        "本年研发投入强度",
+    }
+
+    metrics["流动比率"] = _safe_div(current_assets_end, current_liabilities_end)
+    metrics["速动比率"] = _safe_div(current_assets_end - inventory_end, current_liabilities_end)
+    metrics["现金比率"] = _safe_div(cash_end, current_liabilities_end)
+    metrics["资产负债率"] = _safe_div(liabilities_total_end, assets_total_end)
+    metrics["产权比率"] = _safe_div(liabilities_total_end, equity_total_end)
+    metrics["权益乘数"] = _safe_div(assets_total_end, equity_total_end)
+    metrics["毛利率"] = _safe_div(revenue_ytd - cost_ytd, revenue_ytd)
+    metrics["营业利润率"] = _safe_div(operating_profit_ytd, revenue_ytd)
+    metrics["净利率"] = _safe_div(net_profit_ytd, revenue_ytd)
+    metrics["ROE(净资产收益率)"] = _safe_div(net_profit_ytd, equity_total_end)
+    metrics["ROA(总资产收益率)"] = _safe_div(net_profit_ytd, assets_total_end)
+    metrics["经营活动现金流净额"] = operating_cf_ytd
+    metrics["投资活动现金流净额"] = investing_cf_ytd
+    metrics["筹资活动现金流净额"] = financing_cf_ytd
+    metrics["现金流量比率"] = _safe_div(operating_cf_ytd, current_liabilities_end)
+
+    metrics["当月研发投入强度"] = _safe_div(rd_m, revenue_m)
+    metrics["本年研发投入强度"] = _safe_div(rd_ytd, revenue_ytd)
+
+    products_begin = extract_amount(
+        df_group, ["产成品(库存商品)", "产成品", "库存商品"], sheet_type="资产负债表", time_attr="年初余额", category="资产"
+    )
+    products_end = extract_amount(
+        df_group, ["产成品(库存商品)", "产成品", "库存商品"], sheet_type="资产负债表", time_attr="期末余额", category="资产"
+    )
+    metrics["本年现价工业总产值"] = (main_revenue_ytd or 0.0) + (products_end - products_begin)
+
+    metrics["应收账款周转率"] = _safe_div(revenue_ytd, ar_begin + ar_end)
+    metrics["存货周转率"] = _safe_div(cost_ytd, inventory_begin + inventory_end)
+
+    for k in list(metrics.keys()):
+        if k in ratio_keys:
+            metrics[k] = _format_percent(metrics[k])
+        elif k in {"应收账款周转率", "存货周转率"}:
+            metrics[k] = _round_number(metrics[k], 2)
     return metrics
 
 
@@ -437,6 +697,23 @@ def _list_excel_files(cfg: AppConfig) -> List[str]:
 
 
 ProgressCallback = Callable[[str, int, int, str], None]
+
+
+def _pick_sheet_name(df_group: pd.DataFrame, sheet_type: str) -> str:
+    if df_group is None or df_group.empty:
+        return ""
+    if "来源Sheet" not in df_group.columns or "报表类型" not in df_group.columns:
+        return ""
+    sub = df_group[df_group["报表类型"] == sheet_type]
+    if sub.empty:
+        return ""
+    try:
+        return str(sub["来源Sheet"].mode(dropna=False).iat[0])
+    except Exception:
+        try:
+            return str(sub["来源Sheet"].iloc[0])
+        except Exception:
+            return ""
 
 
 def analyze_directory(
@@ -548,25 +825,61 @@ def analyze_directory(
     result.cleaned_rows = int(len(all_data))
     logger.info(f"原始数据已保存: {cleaned_path}")
 
-    group_cols = ["源文件", "来源Sheet", "日期", "时间属性"]
-    existing_group_cols = [col for col in group_cols if col in all_data.columns]
+    validation_group_cols = ["源文件", "日期"]
+    metrics_group_cols = ["源文件", "日期"]
+    existing_validation_group_cols = [col for col in validation_group_cols if col in all_data.columns]
+    existing_metrics_group_cols = [col for col in metrics_group_cols if col in all_data.columns]
 
     validation_results = []
     metrics_results = []
-    if existing_group_cols:
-        grouped = all_data.groupby(existing_group_cols, dropna=False)
-        for group_keys, df_group in grouped:
+    if existing_validation_group_cols:
+        grouped_validation = all_data.groupby(existing_validation_group_cols, dropna=False)
+        for group_keys, df_group in grouped_validation:
             if cancel_event and cancel_event.is_set():
                 result.cancelled = True
                 logger.warning("已取消运行")
                 return result
 
-            group_info = dict(zip(existing_group_cols, group_keys if isinstance(group_keys, tuple) else [group_keys]))
-            if cfg.generate_validation and "资产负债表" in df_group["报表类型"].values:
-                validation = validate_balance_sheet(df_group, tolerance=float(cfg.validation_tolerance))
-                validation.update(group_info)
-                validation_results.append(validation)
+            group_info = dict(
+                zip(existing_validation_group_cols, group_keys if isinstance(group_keys, tuple) else [group_keys])
+            )
+            if cfg.generate_validation and "报表类型" in df_group.columns:
+                tol = float(cfg.validation_tolerance)
+                has_bs = "资产负债表" in df_group["报表类型"].values
+                has_pl = "利润表" in df_group["报表类型"].values
+                has_cf = "现金流量表" in df_group["报表类型"].values
 
+                if has_bs:
+                    v = validate_balance_sheet(df_group, tolerance=tol, time_attr="期末余额")
+                    v.update(group_info)
+                    v.setdefault("来源Sheet", _pick_sheet_name(df_group, "资产负债表"))
+                    validation_results.append(v)
+
+                if has_bs and has_pl:
+                    v = validate_bs_pl_balance(df_group, tolerance=tol)
+                    v.update(group_info)
+                    bs_sheet = _pick_sheet_name(df_group, "资产负债表")
+                    pl_sheet = _pick_sheet_name(df_group, "利润表")
+                    v.setdefault("来源Sheet", f"BS:{bs_sheet} | PL:{pl_sheet}".strip())
+                    validation_results.append(v)
+
+                if has_bs and has_cf:
+                    v = validate_bs_cf_balance(df_group, tolerance=tol)
+                    v.update(group_info)
+                    bs_sheet = _pick_sheet_name(df_group, "资产负债表")
+                    cf_sheet = _pick_sheet_name(df_group, "现金流量表")
+                    v.setdefault("来源Sheet", f"BS:{bs_sheet} | CF:{cf_sheet}".strip())
+                    validation_results.append(v)
+
+    if existing_metrics_group_cols:
+        grouped_metrics = all_data.groupby(existing_metrics_group_cols, dropna=False)
+        for group_keys, df_group in grouped_metrics:
+            if cancel_event and cancel_event.is_set():
+                result.cancelled = True
+                logger.warning("已取消运行")
+                return result
+
+            group_info = dict(zip(existing_metrics_group_cols, group_keys if isinstance(group_keys, tuple) else [group_keys]))
             if cfg.generate_metrics:
                 metrics = calculate_financial_metrics(df_group)
                 metrics.update(group_info)
@@ -578,11 +891,12 @@ def analyze_directory(
         df_validation.to_excel(validation_path, index=False)
         result.validation_path = validation_path
         result.validation_groups = int(len(df_validation))
+        result.validation_preview = _df_preview_records(df_validation, limit=2000)
         unbalanced = df_validation[df_validation["是否平衡"] == "否"] if "是否平衡" in df_validation.columns else pd.DataFrame()
         result.unbalanced_count = int(len(unbalanced))
         if not unbalanced.empty:
             preview_cols = [c for c in ["源文件", "来源Sheet", "日期", "时间属性", "差额", "验证结果"] if c in unbalanced.columns]
-            result.unbalanced_preview = unbalanced[preview_cols].head(200).to_dict(orient="records")
+            result.unbalanced_preview = _df_preview_records(unbalanced[preview_cols], limit=200)
         logger.info(f"验证报告已保存: {validation_path}")
 
     if cfg.generate_metrics and metrics_results:
@@ -591,7 +905,36 @@ def analyze_directory(
         df_metrics.to_excel(metrics_path, index=False)
         result.metrics_path = metrics_path
         result.metrics_groups = int(len(df_metrics))
+        result.metrics_preview = _df_preview_records(df_metrics, limit=2000)
         logger.info(f"财务指标已保存: {metrics_path}")
 
     return result
 
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="财务数据分析 - 命令行模式")
+    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH, help="配置文件路径(JSON)")
+    parser.add_argument("--input-dir", type=str, default=None, help="输入目录")
+    parser.add_argument("--output-dir", type=str, default=None, help="输出目录")
+    parser.add_argument("--glob", type=str, default=None, help="文件匹配模式，如 *.xlsx")
+    args = parser.parse_args(argv)
+
+    cfg = load_config(args.config)
+    if args.input_dir:
+        cfg.input_dir = args.input_dir
+    if args.output_dir:
+        cfg.output_dir = args.output_dir
+    if args.glob:
+        cfg.file_glob = args.glob
+
+    logger = _get_logger()
+    res = analyze_directory(cfg, logger=logger)
+    if res.cancelled:
+        return 2
+    if res.errors:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

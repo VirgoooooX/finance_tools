@@ -71,6 +71,14 @@ class FinancialAnalyzerUI:
         self.root.title("财务数据分析")
         self.root.geometry("1100x720")
 
+        # 尝试设置窗口图标
+        try:
+            icon_path = os.path.join(os.path.dirname(__file__), "app_icon.ico")
+            if os.path.exists(icon_path):
+                self.root.iconbitmap(icon_path)
+        except Exception:
+            pass
+
         self.tabview = ctk.CTkTabview(self.root)
         self.tabview.pack(fill="both", expand=True, padx=14, pady=14)
 
