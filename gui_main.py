@@ -68,7 +68,94 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """初始化UI"""
         self.setWindowTitle("财务数据分析工具 v2.0")
-        self.setGeometry(100, 100, 900, 700)
+        self.setGeometry(100, 100, 1000, 750)
+        
+        # 设置全局样式
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f7fa;
+            }
+            QWidget {
+                font-family: "Microsoft YaHei", "微软雅黑", Arial, sans-serif;
+                font-size: 10pt;
+            }
+            QGroupBox {
+                background-color: white;
+                border: 1px solid #e1e8ed;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding: 15px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 15px;
+                padding: 0 5px;
+                color: #3498db;
+            }
+            QLineEdit {
+                padding: 8px 12px;
+                border: 2px solid #e1e8ed;
+                border-radius: 6px;
+                background-color: white;
+                selection-background-color: #3498db;
+            }
+            QLineEdit:focus {
+                border-color: #3498db;
+            }
+            QPushButton {
+                padding: 10px 20px;
+                border: none;
+                border-radius: 6px;
+                background-color: #ecf0f1;
+                color: #2c3e50;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #bdc3c7;
+            }
+            QPushButton:pressed {
+                background-color: #95a5a6;
+            }
+            QCheckBox {
+                spacing: 8px;
+                color: #2c3e50;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #bdc3c7;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #3498db;
+                border-color: #3498db;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iOSIgdmlld0JveD0iMCAwIDEyIDkiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTEgNEw0LjUgNy41TDExIDEiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+);
+            }
+            QTextEdit {
+                border: 1px solid #e1e8ed;
+                border-radius: 6px;
+                background-color: #fafbfc;
+                padding: 8px;
+                color: #2c3e50;
+            }
+            QProgressBar {
+                border: none;
+                border-radius: 8px;
+                background-color: #ecf0f1;
+                height: 20px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                border-radius: 8px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3498db, stop:1 #2ecc71);
+            }
+            QLabel {
+                color: #2c3e50;
+            }
+        """)
         
         # 主widget
         central_widget = QWidget()
@@ -76,16 +163,35 @@ class MainWindow(QMainWindow):
         
         # 主布局
         main_layout = QVBoxLayout()
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(20, 20, 20, 20)
         central_widget.setLayout(main_layout)
         
-        # 标题
+        # 标题栏
+        title_widget = QWidget()
+        title_widget.setStyleSheet("""
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #667eea, stop:1 #764ba2);
+            border-radius: 10px;
+            padding: 20px;
+        """)
+        title_layout = QVBoxLayout(title_widget)
+        
         title = QLabel("📊 财务数据分析工具")
         title_font = QFont()
-        title_font.setPointSize(16)
+        title_font.setPointSize(20)
         title_font.setBold(True)
         title.setFont(title_font)
+        title.setStyleSheet("color: white;")
         title.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(title)
+        title_layout.addWidget(title)
+        
+        subtitle = QLabel("智能财务报表处理与分析系统")
+        subtitle.setStyleSheet("color: rgba(255, 255, 255, 0.9); font-size: 11pt;")
+        subtitle.setAlignment(Qt.AlignCenter)
+        title_layout.addWidget(subtitle)
+        
+        main_layout.addWidget(title_widget)
         
         # 文件选择区域
         file_group = self.create_file_selection_group()
@@ -107,45 +213,86 @@ class MainWindow(QMainWindow):
         # 状态标签
         self.status_label = QLabel("就绪")
         self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("""
+            background-color: white;
+            padding: 10px;
+            border-radius: 6px;
+            color: #27ae60;
+            font-weight: bold;
+        """)
         main_layout.addWidget(self.status_label)
         
         # 日志区域
-        log_label = QLabel("📋 处理日志:")
-        main_layout.addWidget(log_label)
+        log_container = QWidget()
+        log_container.setStyleSheet("""
+            background-color: white;
+            border-radius: 8px;
+            padding: 10px;
+        """)
+        log_layout = QVBoxLayout(log_container)
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        
+        log_label = QLabel("📋 处理日志")
+        log_label.setStyleSheet("font-weight: bold; color: #3498db; font-size: 11pt;")
+        log_layout.addWidget(log_label)
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(200)
-        main_layout.addWidget(self.log_text)
+        self.log_text.setMaximumHeight(180)
+        log_layout.addWidget(self.log_text)
+        
+        main_layout.addWidget(log_container)
         
         # 加载配置到UI
         self.load_config_to_ui()
     
     def create_file_selection_group(self):
         """创建文件选择组"""
-        group = QGroupBox("📁 文件选择")
+        group = QGroupBox("📁 数据源")
         layout = QHBoxLayout()
+        layout.setSpacing(10)
+        
+        label = QLabel("工作目录:")
+        label.setStyleSheet("font-weight: normal; min-width: 70px;")
+        layout.addWidget(label)
         
         self.dir_input = QLineEdit()
         self.dir_input.setPlaceholderText("选择包含Excel文件的目录...")
         self.dir_input.setText(os.getcwd())
         layout.addWidget(self.dir_input)
         
-        browse_btn = QPushButton("浏览...")
+        browse_btn = QPushButton("📂 浏览")
+        browse_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
         browse_btn.clicked.connect(self.browse_directory)
         layout.addWidget(browse_btn)
         
         group.setLayout(layout)
         return group
     
+    
     def create_config_group(self):
         """创建配置选项组"""
         group = QGroupBox("⚙️ 配置选项")
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(12)
         
         # 输出选项
-        output_layout = QHBoxLayout()
-        output_layout.addWidget(QLabel("输出选项:"))
+        output_container = QWidget()
+        output_container.setStyleSheet("background-color: #f8f9fa; border-radius: 6px; padding: 10px;")
+        output_layout = QHBoxLayout(output_container)
+        
+        output_label = QLabel("输出内容:")
+        output_label.setStyleSheet("font-weight: bold; min-width: 80px;")
+        output_layout.addWidget(output_label)
         
         self.cb_original = QCheckBox("原始数据")
         self.cb_original.setChecked(True)
@@ -160,28 +307,44 @@ class MainWindow(QMainWindow):
         output_layout.addWidget(self.cb_metrics)
         
         output_layout.addStretch()
-        layout.addLayout(output_layout)
+        main_layout.addWidget(output_container)
         
         # 验证选项
-        validation_layout = QHBoxLayout()
+        validation_container = QWidget()
+        validation_container.setStyleSheet("background-color: #f8f9fa; border-radius: 6px; padding: 10px;")
+        validation_layout = QHBoxLayout(validation_container)
         
         self.cb_enable_validation = QCheckBox("启用会计恒等式验证")
         self.cb_enable_validation.setChecked(True)
         validation_layout.addWidget(self.cb_enable_validation)
         
-        validation_layout.addWidget(QLabel("容差阈值:"))
+        validation_layout.addWidget(QLabel("容差:"))
         self.tolerance_spinbox = QDoubleSpinBox()
         self.tolerance_spinbox.setRange(0, 1000)
         self.tolerance_spinbox.setValue(0.01)
         self.tolerance_spinbox.setDecimals(2)
+        self.tolerance_spinbox.setStyleSheet("""
+            QDoubleSpinBox {
+                padding: 6px;
+                border: 2px solid #e1e8ed;
+                border-radius: 4px;
+                background-color: white;
+                min-width: 80px;
+            }
+        """)
         validation_layout.addWidget(self.tolerance_spinbox)
         
         validation_layout.addStretch()
-        layout.addLayout(validation_layout)
+        main_layout.addWidget(validation_container)
         
         # 指标选项
-        metrics_layout = QHBoxLayout()
-        metrics_layout.addWidget(QLabel("计算指标:"))
+        metrics_container = QWidget()
+        metrics_container.setStyleSheet("background-color: #f8f9fa; border-radius: 6px; padding: 10px;")
+        metrics_layout = QHBoxLayout(metrics_container)
+        
+        metrics_label = QLabel("计算指标:")
+        metrics_label.setStyleSheet("font-weight: bold; min-width: 80px;")
+        metrics_layout.addWidget(metrics_label)
         
         self.cb_liquidity = QCheckBox("流动性")
         self.cb_liquidity.setChecked(True)
@@ -200,20 +363,43 @@ class MainWindow(QMainWindow):
         metrics_layout.addWidget(self.cb_cashflow)
         
         metrics_layout.addStretch()
-        layout.addLayout(metrics_layout)
+        main_layout.addWidget(metrics_container)
         
-        group.setLayout(layout)
+        group.setLayout(main_layout)
         return group
     
     def create_button_layout(self):
         """创建按钮布局"""
         layout = QHBoxLayout()
+        layout.setSpacing(12)
         
         self.edit_mapping_btn = QPushButton("📝 编辑科目映射")
+        self.edit_mapping_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f39c12;
+                color: white;
+                padding: 12px 25px;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #e67e22;
+            }
+        """)
         self.edit_mapping_btn.clicked.connect(self.edit_account_mapping)
         layout.addWidget(self.edit_mapping_btn)
         
-        self.reset_btn = QPushButton("🔄 重置为默认")
+        self.reset_btn = QPushButton("🔄 重置配置")
+        self.reset_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #95a5a6;
+                color: white;
+                padding: 12px 25px;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #7f8c8d;
+            }
+        """)
         self.reset_btn.clicked.connect(self.reset_to_default)
         layout.addWidget(self.reset_btn)
         
@@ -222,18 +408,23 @@ class MainWindow(QMainWindow):
         self.start_btn = QPushButton("▶️ 开始处理")
         self.start_btn.setStyleSheet("""
             QPushButton {
-                background-color: #4CAF50;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #2ecc71, stop:1 #27ae60);
                 color: white;
-                font-size: 14px;
+                font-size: 14pt;
                 font-weight: bold;
-                padding: 10px 30px;
-                border-radius: 5px;
+                padding: 15px 50px;
+                border-radius: 8px;
             }
             QPushButton:hover {
-                background-color: #45a049;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #27ae60, stop:1 #229954);
+            }
+            QPushButton:pressed {
+                background: #1e8449;
             }
             QPushButton:disabled {
-                background-color: #cccccc;
+                background-color: #bdc3c7;
             }
         """)
         self.start_btn.clicked.connect(self.start_processing)
