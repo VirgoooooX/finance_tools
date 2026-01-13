@@ -1,38 +1,37 @@
-# 打包说明
+# 财务数据分析工具 - 打包说明 (CustomTkinter 版本)
 
-## 安装依赖
+## 1. 安装依赖
 
+确保已安装所有必要依赖：
 ```bash
 pip install -r requirements.txt
 ```
 
-## 打包成exe
+## 2. 使用 PyInstaller 打包成单文件 .exe
+
+运行以下命令将应用程序打包：
 
 ```bash
-pyinstaller --name="财务数据分析工具" --windowed --onefile --add-data="config.yaml;." gui_main.py
+pyinstaller --name="财务数据分析工具" \
+            --noconsole \
+            --onefile \
+            --add-data="config.yaml;." \
+            gui_ctk.py
 ```
 
-### 参数说明
-- `--name` - 输出exe的名称
-- `--windowed` - 不显示控制台窗口
-- `--onefile` - 打包成单个exe文件
-- `--add-data` - 包含配置文件（格式：源文件;目标路径）
+### 参数详解：
+- `--name`：生成的可执行文件名称。
+- `--noconsole` (或 `--windowed`)：运行时不显示黑色的控制台窗口。
+- `--onefile`：将所有依赖打包进一个单一的 .exe 文件。
+- `--add-data="config.yaml;."`：将默认配置文件打包进程序（运行时会自动提取）。
 
-## 打包后的文件
+## 3. 打包产物
 
-打包完成后，exe文件在 `dist/` 目录下：
+打包完成后，您可以在项目根目录的 `dist/` 文件夹下找到：
 - `dist/财务数据分析工具.exe`
 
-## 使用方法
+## 4. 运行注意事项
 
-1. 将 `config.yaml` 文件放在exe同目录下（首次运行会自动生成）
-2. 双击运行 `财务数据分析工具.exe`
-3. 选择包含Excel文件的目录
-4. 配置选项
-5. 点击"开始处理"
-
-## 注意事项
-
-- 确保config.yaml文件与exe在同一目录
-- 打包后的exe可以在没有Python环境的电脑上运行
-- 首次运行可能需要Windows Defender权限
+- **首次运行**：程序会自动在当前目录下生成默认的 `config.yaml`（如果不存在）。
+- **配置文件**：如果您想自定义科目匹配，可以直接编辑 exe 同目录下的 `config.yaml`。
+- **环境**：打包后的 exe 可以在没有安装 Python 的 Windows 电脑上独立运行。
