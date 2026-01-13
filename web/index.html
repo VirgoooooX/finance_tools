@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>财务数据分析（本机 Web）</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="/static/styles.css?v=2" rel="stylesheet">
+</head>
+<body>
+  <div class="container-fluid py-3 app-shell dense">
+    <div class="topbar p-3 p-md-4 mb-3">
+      <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3">
+        <div>
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-bar-chart-fill fs-4"></i>
+            <div class="h4 mb-0">财务数据分析</div>
+          </div>
+          <small>本机 Web 控制台（不上传/不下载；本地 Python 负责文件读写）</small>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <button id="btnStart" class="btn btn-primary"><i class="bi bi-play-fill me-1"></i>开始运行</button>
+          <button id="btnStop" class="btn btn-outline-light" disabled><i class="bi bi-stop-fill me-1"></i>停止</button>
+        </div>
+      </div>
+      <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+        <span class="pill"><i class="bi bi-dot"></i><span id="statusText">就绪</span></span>
+        <span class="pill"><i class="bi bi-hourglass-split"></i><span id="progressDetail">0/1</span></span>
+        <span class="pill"><i class="bi bi-hdd-network"></i><span class="mono" id="hostInfo">127.0.0.1</span></span>
+      </div>
+      <div class="progress mt-3" role="progressbar" aria-label="progress" style="height: 10px; border-radius: 999px; overflow: hidden;">
+        <div id="progressBar" class="progress-bar" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <ul class="nav nav-pills mb-3" id="tabs">
+      <li class="nav-item"><button class="nav-link active" data-tab="tab-config"><i class="bi bi-sliders me-1"></i>配置</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="tab-run"><i class="bi bi-rocket-takeoff me-1"></i>运行</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="tab-logs"><i class="bi bi-journal-text me-1"></i>日志</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="tab-results"><i class="bi bi-table me-1"></i>结果</button></li>
+    </ul>
+
+    <div id="tab-config" class="tab-pane">
+      <div class="settings-grid">
+        <div class="card">
+          <div class="card-body">
+            <div class="settings-card-header">
+              <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-2">
+                <div>
+                  <div class="h5 mb-1 section-title"><i class="bi bi-sliders2 me-1"></i>设置</div>
+                  <div class="help">保存配置后，用于扫描与运行。</div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button id="btnReloadCfg" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-clockwise me-1"></i>重新加载</button>
+                  <button id="btnSaveCfg" class="btn btn-outline-success btn-sm"><i class="bi bi-check2-circle me-1"></i>保存配置</button>
+                </div>
+              </div>
+              <div class="mini-kbd mt-2">
+                <div class="key"><i class="bi bi-1-circle me-1"></i>保存配置</div>
+                <div class="key"><i class="bi bi-2-circle me-1"></i>扫描文件</div>
+                <div class="key"><i class="bi bi-3-circle me-1"></i>开始运行</div>
+              </div>
+            </div>
+
+            <div class="accordion" id="settingsAccordion">
+              <div class="accordion-item mb-2">
+                <h2 class="accordion-header">
+                  <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#accPaths" aria-expanded="true">
+                    <i class="bi bi-folder2-open me-2"></i>路径与输出
+                  </button>
+                </h2>
+                <div id="accPaths" class="accordion-collapse collapse show" data-bs-parent="#settingsAccordion">
+                  <div class="accordion-body">
+                    <div class="row g-2">
+                      <div class="col-12">
+                        <label class="form-label">输入目录</label>
+                        <input id="input_dir" class="form-control" placeholder="例如：L:\Web\Financial data analysis">
+                        <div class="help">要扫描的 Excel 所在文件夹。</div>
+                      </div>
+                      <div class="col-12 col-lg-5">
+                        <label class="form-label">文件匹配</label>
+                        <input id="file_glob" class="form-control" placeholder="例如：*.xlsx">
+                        <div class="help">glob 匹配模式，例如 *.xlsx 或 *合并*.xlsx。</div>
+                      </div>
+                      <div class="col-12 col-lg-7">
+                        <label class="form-label">输出目录</label>
+                        <input id="output_dir" class="form-control" placeholder="例如：L:\Web\Financial data analysis">
+                        <div class="help">清洗结果输出的文件夹。</div>
+                      </div>
+                      <div class="col-12">
+                        <label class="form-label">输出文件名</label>
+                        <input id="output_basename" class="form-control" placeholder="例如：清洗后的AI标准财务表.xlsx">
+                        <div class="help">会自动生成 _验证报告.xlsx / _财务指标.xlsx。</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="accordion-item mb-2">
+                <h2 class="accordion-header">
+                  <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#accKeywords" aria-expanded="false">
+                    <i class="bi bi-funnel me-2"></i>识别关键字
+                  </button>
+                </h2>
+                <div id="accKeywords" class="accordion-collapse collapse" data-bs-parent="#settingsAccordion">
+                  <div class="accordion-body">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-4">
+                        <label class="form-label">BS Sheet关键字</label>
+                        <input id="sheet_keyword_bs" class="form-control">
+                        <div class="help">包含即可，不区分大小写。</div>
+                      </div>
+                      <div class="col-12 col-md-4">
+                        <label class="form-label">PL Sheet关键字</label>
+                        <input id="sheet_keyword_pl" class="form-control">
+                        <div class="help">包含即可，不区分大小写。</div>
+                      </div>
+                      <div class="col-12 col-md-4">
+                        <label class="form-label">CF Sheet关键字</label>
+                        <input id="sheet_keyword_cf" class="form-control">
+                        <div class="help">包含即可，不区分大小写。</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="accordion-item mb-2">
+                <h2 class="accordion-header">
+                  <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#accHeaders" aria-expanded="false">
+                    <i class="bi bi-layout-text-window-reverse me-2"></i>表头定位
+                  </button>
+                </h2>
+                <div id="accHeaders" class="accordion-collapse collapse" data-bs-parent="#settingsAccordion">
+                  <div class="accordion-body">
+                    <div class="row g-2">
+                      <div class="col-12 col-md-4">
+                        <label class="form-label">BS 表头关键字</label>
+                        <input id="header_keyword_bs" class="form-control">
+                        <div class="help">整行包含关键字即可。</div>
+                      </div>
+                      <div class="col-12 col-md-4">
+                        <label class="form-label">PL 表头关键字</label>
+                        <input id="header_keyword_pl" class="form-control">
+                        <div class="help">整行包含关键字即可。</div>
+                      </div>
+                      <div class="col-12 col-md-4">
+                        <label class="form-label">CF 表头关键字</label>
+                        <input id="header_keyword_cf" class="form-control">
+                        <div class="help">整行包含关键字即可。</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="accordion-item">
+                <h2 class="accordion-header">
+                  <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#accDates" aria-expanded="false">
+                    <i class="bi bi-calendar2-event me-2"></i>日期与验证
+                  </button>
+                </h2>
+                <div id="accDates" class="accordion-collapse collapse" data-bs-parent="#settingsAccordion">
+                  <div class="accordion-body">
+                    <div class="row g-2">
+                      <div class="col-12 col-lg-4">
+                        <label class="form-label">BS 日期单元格</label>
+                        <input id="date_cells_bs" class="form-control" placeholder="例如：2,3;2,2">
+                        <div class="help">候选单元格（从0开始）。</div>
+                      </div>
+                      <div class="col-12 col-lg-4">
+                        <label class="form-label">PL 日期单元格</label>
+                        <input id="date_cells_pl" class="form-control" placeholder="例如：2,0;2,2">
+                        <div class="help">候选单元格（从0开始）。</div>
+                      </div>
+                      <div class="col-12 col-lg-4">
+                        <label class="form-label">CF 日期单元格</label>
+                        <input id="date_cells_cf" class="form-control" placeholder="例如：2,4;2,0">
+                        <div class="help">候选单元格（从0开始）。</div>
+                      </div>
+
+                      <div class="col-12 col-lg-4">
+                        <label class="form-label">验证容差</label>
+                        <input id="validation_tolerance" class="form-control" placeholder="0.01">
+                        <div class="help">资产=负债+权益允许的最大差额。</div>
+                      </div>
+                      <div class="col-12 col-lg-8">
+                        <div class="soft">
+                          <div class="row g-1">
+                            <div class="col-12 col-md-4">
+                              <div class="form-check form-switch">
+                                <input id="generate_validation" class="form-check-input" type="checkbox" role="switch">
+                                <label class="form-check-label" for="generate_validation">生成验证报告</label>
+                              </div>
+                            </div>
+                            <div class="col-12 col-md-4">
+                              <div class="form-check form-switch">
+                                <input id="generate_metrics" class="form-check-input" type="checkbox" role="switch">
+                                <label class="form-check-label" for="generate_metrics">生成财务指标</label>
+                              </div>
+                            </div>
+                            <div class="col-12 col-md-4">
+                              <div class="form-check form-switch">
+                                <input id="exclude_output_files" class="form-check-input" type="checkbox" role="switch">
+                                <label class="form-check-label" for="exclude_output_files">排除输出文件</label>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="help mt-1">非日期会自动在附近搜索；保存配置后生效。</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="d-flex flex-column gap-3">
+          <div class="card">
+            <div class="card-body">
+              <div class="h6 mb-1 section-title"><i class="bi bi-lightning-charge me-1"></i>快捷操作</div>
+              <div class="help mb-2">推荐顺序：保存配置 → 扫描文件 → 开始运行。</div>
+              <div class="d-grid gap-2">
+                <button class="btn btn-outline-success" id="btnSaveCfg2"><i class="bi bi-check2-circle me-1"></i>保存配置</button>
+                <button class="btn btn-outline-primary" id="btnScan2"><i class="bi bi-search me-1"></i>扫描文件</button>
+                <button class="btn btn-primary" id="btnStart2"><i class="bi bi-play-fill me-1"></i>开始运行</button>
+                <button class="btn btn-outline-danger" id="btnStop2" disabled><i class="bi bi-stop-fill me-1"></i>停止</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-body">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="h6 mb-0 section-title"><i class="bi bi-files me-1"></i>文件预览</div>
+                <button class="btn btn-outline-secondary btn-sm" id="btnClearFiles"><i class="bi bi-x-lg me-1"></i>清空</button>
+              </div>
+              <div class="help mb-2">最多显示 500 个文件名。</div>
+              <div id="filesPreview" class="mono small text-secondary files-preview"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-run" class="tab-pane d-none">
+      <div class="row g-3">
+        <div class="col-12">
+          <div class="card">
+            <div class="card-body">
+              <div class="h5 mb-2 section-title"><i class="bi bi-rocket-takeoff me-1"></i>运行</div>
+              <div class="help mb-3">运行过程会把日志与进度实时推送到“日志”页。</div>
+              <div class="kpi">
+                <div class="item">
+                  <div class="label">状态</div>
+                  <div class="value" id="runStatusKpi">就绪</div>
+                </div>
+                <div class="item">
+                  <div class="label">当前进度</div>
+                  <div class="value" id="runProgressKpi">0/1</div>
+                </div>
+                <div class="item">
+                  <div class="label">当前文件</div>
+                  <div class="value mono" id="runFileKpi">-</div>
+                </div>
+              </div>
+              <div class="mt-3 d-flex flex-wrap gap-2">
+                <button class="btn btn-primary" id="btnStart3"><i class="bi bi-play-fill me-1"></i>开始运行</button>
+                <button class="btn btn-outline-danger" id="btnStop3" disabled><i class="bi bi-stop-fill me-1"></i>停止</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-logs" class="tab-pane d-none">
+      <div class="row g-3">
+        <div class="col-12">
+          <div class="card">
+            <div class="card-body">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="h5 mb-0 section-title"><i class="bi bi-journal-text me-1"></i>日志</div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-sm btn-outline-secondary" id="btnClearLogs"><i class="bi bi-trash me-1"></i>清空</button>
+                  <button class="btn btn-sm btn-outline-secondary" id="btnCopyLogs"><i class="bi bi-clipboard me-1"></i>复制</button>
+                </div>
+              </div>
+              <div id="logs" class="p-2 mono small"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-results" class="tab-pane d-none">
+      <div class="row g-3">
+        <div class="col-12">
+          <div class="card">
+            <div class="card-body">
+              <div class="h5 mb-3 section-title"><i class="bi bi-table me-1"></i>结果</div>
+
+              <div class="row g-2 mb-3">
+                <div class="col-12">
+                  <div class="fw-semibold">清洗数据</div>
+                  <div class="d-flex gap-2 align-items-center">
+                    <div id="outCleaned" class="mono small text-secondary flex-grow-1"></div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="openPath('cleaned')"><i class="bi bi-box-arrow-up-right me-1"></i>打开</button>
+                  </div>
+                </div>
+                <div class="col-12">
+                  <div class="fw-semibold">验证报告</div>
+                  <div class="d-flex gap-2 align-items-center">
+                    <div id="outValidation" class="mono small text-secondary flex-grow-1"></div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="openPath('validation')"><i class="bi bi-box-arrow-up-right me-1"></i>打开</button>
+                  </div>
+                </div>
+                <div class="col-12">
+                  <div class="fw-semibold">财务指标</div>
+                  <div class="d-flex gap-2 align-items-center">
+                    <div id="outMetrics" class="mono small text-secondary flex-grow-1"></div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="openPath('metrics')"><i class="bi bi-box-arrow-up-right me-1"></i>打开</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="fw-semibold mb-2">不平衡记录预览（最多200条）</div>
+              <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>源文件</th>
+                      <th>来源Sheet</th>
+                      <th>日期</th>
+                      <th>时间属性</th>
+                      <th>差额</th>
+                      <th>验证结果</th>
+                    </tr>
+                  </thead>
+                  <tbody id="unbalancedBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+let latestPaths = { cleaned: '', validation: '', metrics: '' };
+let es = null;
+let lastProgress = { current: 0, total: 1, detail: '' };
+
+function showTab(id) {
+  for (const el of document.querySelectorAll('.tab-pane')) el.classList.add('d-none');
+  document.getElementById(id).classList.remove('d-none');
+  for (const b of document.querySelectorAll('#tabs .nav-link')) {
+    b.classList.toggle('active', b.getAttribute('data-tab') === id);
+  }
+}
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tab]');
+  if (!btn) return;
+  showTab(btn.getAttribute('data-tab'));
+});
+
+function setStatus(text) {
+  document.getElementById('statusText').innerText = text || '';
+  document.getElementById('runStatusKpi').innerText = text || '';
+}
+
+function appendLog(line) {
+  const logs = document.getElementById('logs');
+  const div = document.createElement('div');
+  div.className = 'line';
+  div.innerText = line;
+  logs.appendChild(div);
+  logs.scrollTop = logs.scrollHeight;
+}
+
+function setProgress(current, total, detail) {
+  const t = Math.max(1, parseInt(total || 1));
+  const c = Math.max(0, parseInt(current || 0));
+  const pct = Math.min(100, Math.max(0, Math.round((c / t) * 100)));
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressDetail').innerText = `${c}/${t} ${detail || ''}`.trim();
+  document.getElementById('runProgressKpi').innerText = `${c}/${t}`;
+  document.getElementById('runFileKpi').innerText = (detail || '-');
+  lastProgress = { current: c, total: t, detail: detail || '' };
+}
+
+function cellsToText(cells) {
+  if (!Array.isArray(cells)) return '';
+  return cells.map(x => Array.isArray(x) && x.length >= 2 ? `${x[0]},${x[1]}` : '').filter(Boolean).join(';');
+}
+
+function textToCells(text) {
+  const s = (text || '').trim();
+  if (!s) return [];
+  return s.split(/[;\n|]+/).map(x => x.trim()).filter(Boolean).map(chunk => {
+    const parts = chunk.split(/[, \t]+/).map(x => x.trim()).filter(Boolean);
+    if (parts.length < 2) return null;
+    const r = parseInt(parts[0]); const c = parseInt(parts[1]);
+    if (Number.isNaN(r) || Number.isNaN(c)) return null;
+    return [r, c];
+  }).filter(Boolean);
+}
+
+function getCfgFromForm() {
+  const tol = document.getElementById('validation_tolerance').value;
+  return {
+    input_dir: document.getElementById('input_dir').value.trim(),
+    file_glob: document.getElementById('file_glob').value.trim(),
+    output_dir: document.getElementById('output_dir').value.trim(),
+    output_basename: document.getElementById('output_basename').value.trim(),
+    generate_validation: document.getElementById('generate_validation').checked,
+    generate_metrics: document.getElementById('generate_metrics').checked,
+    exclude_output_files: document.getElementById('exclude_output_files').checked,
+    sheet_keyword_bs: document.getElementById('sheet_keyword_bs').value.trim(),
+    sheet_keyword_pl: document.getElementById('sheet_keyword_pl').value.trim(),
+    sheet_keyword_cf: document.getElementById('sheet_keyword_cf').value.trim(),
+    header_keyword_bs: document.getElementById('header_keyword_bs').value.trim(),
+    header_keyword_pl: document.getElementById('header_keyword_pl').value.trim(),
+    header_keyword_cf: document.getElementById('header_keyword_cf').value.trim(),
+    date_cells_bs: textToCells(document.getElementById('date_cells_bs').value),
+    date_cells_pl: textToCells(document.getElementById('date_cells_pl').value),
+    date_cells_cf: textToCells(document.getElementById('date_cells_cf').value),
+    validation_tolerance: parseFloat(tol ? tol : '0.01')
+  };
+}
+
+function fillForm(cfg) {
+  document.getElementById('input_dir').value = cfg.input_dir || '';
+  document.getElementById('file_glob').value = cfg.file_glob || '';
+  document.getElementById('output_dir').value = cfg.output_dir || '';
+  document.getElementById('output_basename').value = cfg.output_basename || '';
+  document.getElementById('generate_validation').checked = !!cfg.generate_validation;
+  document.getElementById('generate_metrics').checked = !!cfg.generate_metrics;
+  document.getElementById('exclude_output_files').checked = !!cfg.exclude_output_files;
+  document.getElementById('sheet_keyword_bs').value = cfg.sheet_keyword_bs || '';
+  document.getElementById('sheet_keyword_pl').value = cfg.sheet_keyword_pl || '';
+  document.getElementById('sheet_keyword_cf').value = cfg.sheet_keyword_cf || '';
+  document.getElementById('header_keyword_bs').value = cfg.header_keyword_bs || '';
+  document.getElementById('header_keyword_pl').value = cfg.header_keyword_pl || '';
+  document.getElementById('header_keyword_cf').value = cfg.header_keyword_cf || '';
+  document.getElementById('date_cells_bs').value = cellsToText(cfg.date_cells_bs);
+  document.getElementById('date_cells_pl').value = cellsToText(cfg.date_cells_pl);
+  document.getElementById('date_cells_cf').value = cellsToText(cfg.date_cells_cf);
+  document.getElementById('validation_tolerance').value = (cfg.validation_tolerance != null ? cfg.validation_tolerance : 0.01);
+}
+
+async function reloadCfg() {
+  const resp = await fetch('/api/config');
+  const data = await resp.json();
+  fillForm(data);
+  setStatus('已加载配置');
+}
+
+async function saveCfg() {
+  const payload = getCfgFromForm();
+  const resp = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const data = await resp.json();
+  fillForm(data);
+  setStatus('已保存配置');
+}
+
+async function scanFiles() {
+  await saveCfg();
+  const resp = await fetch('/api/scan', { method: 'POST' });
+  const data = await resp.json();
+  const box = document.getElementById('filesPreview');
+  if (!data.files || data.files.length === 0) {
+    box.innerText = '未找到匹配文件';
+    return;
+  }
+  const list = data.files.slice(0, 500).map(p => p.split(/[\\\\/]/).pop()).join('\\n');
+  box.innerText = data.files.length > 500 ? list + `\\n... 还有 ${data.files.length - 500} 个文件未显示` : list;
+  setStatus(`扫描到 ${data.files.length} 个文件`);
+}
+
+function setButtons(running) {
+  const setDisabled = (id, disabled) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !!disabled;
+  };
+  setDisabled('btnStart', !!running);
+  setDisabled('btnStop', !running);
+  setDisabled('btnStart2', !!running);
+  setDisabled('btnStop2', !running);
+  setDisabled('btnStart3', !!running);
+  setDisabled('btnStop3', !running);
+}
+
+async function startRun() {
+  document.getElementById('logs').innerHTML = '';
+  document.getElementById('unbalancedBody').innerHTML = '';
+  document.getElementById('outCleaned').innerText = '';
+  document.getElementById('outValidation').innerText = '';
+  document.getElementById('outMetrics').innerText = '';
+  latestPaths = { cleaned: '', validation: '', metrics: '' };
+  setProgress(0, 1, '');
+  await saveCfg();
+  const resp = await fetch('/api/run/start', { method: 'POST' });
+  const data = await resp.json();
+  if (!data.ok) {
+    setStatus(data.message || '无法启动');
+    return;
+  }
+  setStatus('运行中...');
+  setButtons(true);
+  showTab('tab-logs');
+  if (!es) connectStream();
+}
+
+async function stopRun() {
+  await fetch('/api/run/stop', { method: 'POST' });
+  setStatus('正在停止...');
+}
+
+async function openPath(kind) {
+  const path = (latestPaths[kind] || '').trim();
+  if (!path) return;
+  await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+}
+
+function renderUnbalanced(rows) {
+  const body = document.getElementById('unbalancedBody');
+  body.innerHTML = '';
+  if (!Array.isArray(rows)) return;
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const cols = ['源文件', '来源Sheet', '日期', '时间属性', '差额', '验证结果'];
+    for (const c of cols) {
+      const td = document.createElement('td');
+      td.innerText = (r && r[c] != null) ? String(r[c]) : '';
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+}
+
+function connectStream() {
+  es = new EventSource('/api/stream');
+  es.addEventListener('log', (e) => {
+    try { appendLog(JSON.parse(e.data).message); } catch { appendLog(e.data); }
+  });
+  es.addEventListener('progress', (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      setProgress(d.current, d.total, d.detail);
+    } catch {}
+  });
+  es.addEventListener('status', (e) => {
+    try { setStatus(JSON.parse(e.data).message); } catch { setStatus(e.data); }
+  });
+  es.addEventListener('done', (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      const res = d.result || {};
+      latestPaths.cleaned = res.cleaned_path || '';
+      latestPaths.validation = res.validation_path || '';
+      latestPaths.metrics = res.metrics_path || '';
+      document.getElementById('outCleaned').innerText = latestPaths.cleaned;
+      document.getElementById('outValidation').innerText = latestPaths.validation;
+      document.getElementById('outMetrics').innerText = latestPaths.metrics;
+      renderUnbalanced(res.unbalanced_preview || []);
+      if (res.cancelled) setStatus('已取消');
+      else if (res.errors && res.errors.length) setStatus('完成（有错误）');
+      else setStatus('完成');
+    } catch {}
+    setButtons(false);
+    showTab('tab-results');
+  });
+  es.onerror = () => {};
+}
+
+const bind = (id, handler) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('click', handler);
+};
+
+bind('btnReloadCfg', reloadCfg);
+bind('btnSaveCfg', saveCfg);
+bind('btnSaveCfg2', saveCfg);
+bind('btnScan', scanFiles);
+bind('btnScan2', scanFiles);
+bind('btnStart', startRun);
+bind('btnStart2', startRun);
+bind('btnStart3', startRun);
+bind('btnStop', stopRun);
+bind('btnStop2', stopRun);
+bind('btnStop3', stopRun);
+bind('btnClearFiles', () => {
+  const el = document.getElementById('filesPreview');
+  if (el) el.innerText = '';
+  setStatus('已清空文件预览');
+});
+bind('btnClearLogs', () => document.getElementById('logs').innerHTML = '');
+bind('btnCopyLogs', async () => {
+  const lines = Array.from(document.querySelectorAll('#logs .line')).map(x => x.innerText).join('\\n');
+  try { await navigator.clipboard.writeText(lines); setStatus('已复制日志'); } catch { setStatus('复制失败'); }
+});
+
+document.getElementById('hostInfo').innerText = window.location.host;
+reloadCfg().then(() => connectStream());
+</script>
+</body>
+</html>
