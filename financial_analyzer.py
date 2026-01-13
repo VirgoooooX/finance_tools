@@ -141,7 +141,7 @@ class FinancialAnalyzer:
             return pd.DataFrame()
 
     def extract_amount(self, df, account_key, sheet_type=None, time_attr=None, category=None):
-        """从配置好的关键字中提取金额"""
+        """从配置好的关键字中提取金额（精准匹配）"""
         keywords = self.config.get('科目映射', {}).get(account_key, [account_key])
         
         filtered_df = df.copy()
@@ -152,8 +152,9 @@ class FinancialAnalyzer:
         if category:
             filtered_df = filtered_df[filtered_df['大类'] == category]
         
+        # 精准匹配：先去除科目名称两端空格，然后完全匹配
         for keyword in keywords:
-            matched = filtered_df[filtered_df['科目'].str.contains(keyword, case=False, na=False)]
+            matched = filtered_df[filtered_df['科目'].str.strip() == keyword]
             if not matched.empty:
                 return matched.iloc[0]['金额']
         return 0
