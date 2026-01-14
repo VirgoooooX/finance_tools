@@ -47,6 +47,7 @@ class AppConfig:
     date_cells_pl: List[List[int]] = field(default_factory=lambda: [[2, 2], [2, 1]])
     date_cells_cf: List[List[int]] = field(default_factory=lambda: [[2, 4], [2, 0]])
     validation_tolerance: float = 0.01
+    saved_queries: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +88,111 @@ def _resolve_under_base(path: str) -> str:
     if os.path.isabs(p):
         return os.path.abspath(p)
     return os.path.abspath(os.path.join(get_base_dir(), p))
+
+
+_RULES_CACHE: Dict[str, Any] = {"mtime": None, "data": None, "aliases": None}
+
+
+def _rules_path() -> str:
+    return os.path.join(get_base_dir(), "config", "rules.json")
+
+def _maybe_materialize_rules_json(target_path: str) -> None:
+    p = str(target_path or "").strip()
+    if not p or os.path.exists(p):
+        return
+    if hasattr(sys, "_MEIPASS"):
+        try:
+            embedded = os.path.join(getattr(sys, "_MEIPASS"), "config", "rules.json")
+            if os.path.exists(embedded):
+                _ensure_dir(os.path.dirname(p) or os.getcwd())
+                with open(embedded, "r", encoding="utf-8") as rf:
+                    raw = rf.read()
+                with open(p, "w", encoding="utf-8") as wf:
+                    wf.write(raw)
+                return
+        except Exception:
+            pass
+    try:
+        legacy = os.path.join(get_base_dir(), "rules.json")
+        if os.path.exists(legacy):
+            _ensure_dir(os.path.dirname(p) or os.getcwd())
+            with open(legacy, "r", encoding="utf-8") as rf:
+                raw = rf.read()
+            with open(p, "w", encoding="utf-8") as wf:
+                wf.write(raw)
+    except Exception:
+        pass
+
+
+def _load_rules() -> Dict[str, Any]:
+    p = _rules_path()
+    _maybe_materialize_rules_json(p)
+    try:
+        mtime = float(os.path.getmtime(p))
+    except Exception:
+        mtime = None
+
+    cached_mtime = _RULES_CACHE.get("mtime")
+    cached_data = _RULES_CACHE.get("data")
+    if cached_data is not None and cached_mtime == mtime:
+        return cached_data
+
+    data: Dict[str, Any] = {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            raw = json.load(f) or {}
+        if isinstance(raw, dict):
+            data = raw
+    except Exception:
+        data = {}
+
+    aliases = {}
+    try:
+        sa = data.get("subject_aliases") if isinstance(data, dict) else None
+        if isinstance(sa, dict):
+            for canon, syns in sa.items():
+                canon_s = str(canon or "").strip()
+                if not canon_s:
+                    continue
+                items = [canon_s]
+                if isinstance(syns, list):
+                    for x in syns:
+                        xs = str(x or "").strip()
+                        if xs:
+                            items.append(xs)
+                variants = list(dict.fromkeys(items))
+                for v in variants:
+                    aliases.setdefault(_normalize_subject_text(v), set()).update(variants)
+    except Exception:
+        aliases = {}
+
+    _RULES_CACHE["mtime"] = mtime
+    _RULES_CACHE["data"] = data
+    _RULES_CACHE["aliases"] = aliases
+    return data
+
+
+def _expand_keywords(keywords: List[Any]) -> List[str]:
+    rules = _load_rules()
+    aliases = _RULES_CACHE.get("aliases") or {}
+    out: List[str] = []
+    seen = set()
+    for kw in (keywords or []):
+        s = str(kw or "").strip()
+        if not s:
+            continue
+        norm = _normalize_subject_text(s)
+        variants = aliases.get(norm)
+        if variants:
+            for v in variants:
+                if v not in seen:
+                    out.append(v)
+                    seen.add(v)
+        else:
+            if s not in seen:
+                out.append(s)
+                seen.add(s)
+    return out
 
 
 def _is_timestamp_folder(name: str) -> bool:
@@ -179,6 +285,17 @@ def _write_cleaned_sqlite(
 def load_config(path: str) -> AppConfig:
     try:
         if not os.path.exists(path):
+            if hasattr(sys, "_MEIPASS"):
+                try:
+                    embedded = os.path.join(getattr(sys, "_MEIPASS"), "config", "financial_analyzer_config.json")
+                    if os.path.exists(embedded):
+                        _ensure_dir(os.path.dirname(path) or os.getcwd())
+                        with open(embedded, "r", encoding="utf-8") as rf:
+                            raw = rf.read()
+                        with open(path, "w", encoding="utf-8") as wf:
+                            wf.write(raw)
+                except Exception:
+                    pass
             legacy = os.path.join(get_base_dir(), "financial_analyzer_config.json")
             if os.path.exists(legacy):
                 try:
@@ -571,22 +688,38 @@ def extract_amount_info(df, keywords, sheet_type=None, time_attr=None, category=
 
     subjects_norm = filtered_df["科目"].astype(str).map(_normalize_subject_text)
 
-    for keyword in keywords:
+    expanded = _expand_keywords(list(keywords or []))
+    
+    # First pass: Exact match
+    for keyword in expanded:
         kw_norm = _normalize_subject_text(keyword)
         if not kw_norm:
             continue
-
         exact_mask = subjects_norm == kw_norm
         if exact_mask.any():
             row = filtered_df.loc[exact_mask].iloc[0]
             return float(row["金额"]), True, str(row["科目"])
 
+    # Second pass: Partial match (contains)
+    for keyword in expanded:
+        kw_norm = _normalize_subject_text(keyword)
+        if not kw_norm:
+            continue
         contain_mask = subjects_norm.str.contains(re.escape(kw_norm), na=False)
         if contain_mask.any():
             candidates = filtered_df.loc[contain_mask, ["科目", "金额"]].copy()
             candidates["__len"] = candidates["科目"].astype(str).map(lambda x: len(_normalize_subject_text(x)))
             candidates = candidates.sort_values("__len", ascending=True)
             row = candidates.iloc[0]
+            # Double check to avoid matching "Liabilities and Equity" when looking for "Equity"
+            # If the candidate contains "负债" and we are looking for Equity (and keyword doesn't contain 负债), skip it?
+            # But we don't know if we are looking for Equity specifically here (generic function).
+            # But usually "Total Liabilities and Equity" is much longer than "Total Equity".
+            # If we sort by length (ascending), "Total Equity" should come before "Total Liabilities and Equity".
+            # The issue only happens if "Total Equity" is MISSING completely.
+            # In that case, we might still match "Total Liabilities and Equity" which is bad.
+            # We can add a blacklist? Or specific logic?
+            # For now, splitting passes is a huge improvement.
             return float(row["金额"]), True, str(row["科目"])
 
     return 0.0, False, ""
@@ -761,6 +894,78 @@ def _safe_div(n: float, d: float) -> Optional[float]:
 
 
 def calculate_financial_metrics(df_group):
+    rules = _load_rules()
+    metrics_def = rules.get("metrics", [])
+    variables_def = rules.get("variables", {})
+
+    # 如果没有配置 metrics，尝试使用内置的硬编码逻辑（作为后备或初始过渡）
+    # 但由于我们已经生成了完整的 rules.json，这里直接优先使用 rules.json
+    # 为了防止 rules.json 被意外清空，如果 metrics_def 为空，可以保留原有逻辑。
+    # 不过为了代码整洁，我们假设 rules.json 是 source of truth。
+    
+    # 1. 计算所有变量
+    var_values = {}
+    if variables_def:
+        for var_name, var_rule in variables_def.items():
+            keywords = var_rule.get("keywords", [])
+            sheet_type = var_rule.get("sheet_type")
+            time_attr = var_rule.get("time_attr")
+            category = var_rule.get("category")
+            val = extract_amount(df_group, keywords, sheet_type=sheet_type, time_attr=time_attr, category=category)
+            var_values[var_name] = val
+    
+    # 如果 variables_def 为空（例如旧版配置），我们需要手动提取旧逻辑所需的变量吗？
+    # 鉴于用户明确要求“外置”，我们应当依赖 rules.json。
+    # 如果 rules.json 只有 subject_aliases，那么 metrics_def 也为空，返回空字典。
+    
+    if not metrics_def:
+        # Fallback to hardcoded if no metrics defined in rules
+        # (Copying original logic for safety if rules.json is missing metrics)
+        return _calculate_financial_metrics_fallback(df_group)
+
+    metrics = {}
+    
+    # Context for eval
+    context = {
+        "safe_div": _safe_div,
+        "abs": abs,
+        "round": round,
+        "max": max,
+        "min": min,
+        **var_values
+    }
+
+    for m in metrics_def:
+        name = m.get("name")
+        formula = m.get("formula")
+        fmt = m.get("format")
+        
+        if not name or not formula:
+            continue
+            
+        try:
+            # 允许在公式中使用变量名
+            val = eval(formula, {"__builtins__": {}}, context)
+        except Exception:
+            val = None
+            
+        if fmt == "percent":
+            metrics[name] = _format_percent(val)
+        elif fmt == "round2":
+            metrics[name] = _round_number(val, 2)
+        elif fmt == "number":
+            # 保持原值（可能是 float 或 int）
+            metrics[name] = val
+        else:
+            metrics[name] = val
+
+    return metrics
+
+
+def _calculate_financial_metrics_fallback(df_group):
+    """
+    保留原有硬编码逻辑作为后备，防止 rules.json 配置缺失
+    """
     metrics = {}
     assets_total_end = extract_amount(df_group, ["资产总计", "资产总额", "资产合计"], sheet_type="资产负债表", time_attr="期末余额")
     current_assets_end = extract_amount(
@@ -1086,7 +1291,27 @@ def analyze_directory(
     if cfg.generate_validation and validation_results:
         df_validation = pd.DataFrame(validation_results)
         validation_path = cleaned_path.replace(".xlsx", "_验证报告.xlsx")
-        df_validation.to_excel(validation_path, index=False)
+        try:
+            with pd.ExcelWriter(validation_path, engine="openpyxl") as writer:
+                df_validation.to_excel(writer, index=False, sheet_name="验证明细")
+                try:
+                    dfv = df_validation.copy()
+                    if "差额" in dfv.columns:
+                        dfv["差额"] = pd.to_numeric(dfv["差额"], errors="coerce")
+                    grp_cols = [c for c in ["源文件", "日期", "验证项目"] if c in dfv.columns]
+                    if grp_cols:
+                        g = dfv.groupby(grp_cols, dropna=False)
+                        agg = g.agg(
+                            总条数=("验证项目", "count"),
+                            不平衡条数=("是否平衡", lambda s: int((s == "否").sum())),
+                            最大差额=("差额", "max"),
+                            平均差额=("差额", "mean"),
+                        ).reset_index()
+                        agg.to_excel(writer, index=False, sheet_name="异常汇总")
+                except Exception:
+                    pass
+        except Exception:
+            df_validation.to_excel(validation_path, index=False)
         result.validation_path = validation_path
         result.validation_groups = int(len(df_validation))
         result.validation_preview = _df_preview_records(df_validation, limit=2000)

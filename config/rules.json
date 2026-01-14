@@ -1,0 +1,322 @@
+{
+  "subject_aliases": {
+    "èµäº§æ»è®¡": [
+      "èµäº§æ»é¢",
+      "èµäº§åè®¡"
+    ],
+    "è´åºåè®¡": [
+      "è´åºæ»è®¡",
+      "è´åºæ»é¢"
+    ],
+    "ææèæçåè®¡": [
+      "è¡ä¸æçåè®¡",
+      "æçåè®¡",
+      "ææèæçï¼æè¡ä¸æçï¼åè®¡"
+    ],
+    "åºæ¶è´¦æ¬¾": [
+      "åºæ¶å¸æ¬¾"
+    ],
+    "è¥ä¸æ¶å¥": [
+      "ä¸»è¥ä¸å¡æ¶å¥"
+    ],
+    "è¥ä¸ææ¬": [
+      "ä¸»è¥ä¸å¡ææ¬"
+    ],
+    "ææ«ç°éåç°éç­ä»·ç©ä½é¢": [
+      "ææ«ç°éåç°éç­ä»·ç©ä½é¢(éæ³¨)",
+      "ææ«ç°éåç°éç­ä»·ç©ä½é¢ï¼éæ³¨ï¼"
+    ],
+    "äº§æå(åºå­åå)": [
+      "äº§æå",
+      "åºå­åå"
+    ]
+  },
+  "variables": {
+    "assets_total_end": {
+      "keywords": [
+        "èµäº§æ»è®¡",
+        "èµäº§æ»é¢",
+        "èµäº§åè®¡"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢"
+    },
+    "current_assets_end": {
+      "keywords": [
+        "æµå¨èµäº§åè®¡",
+        "æµå¨èµäº§æ»è®¡"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢"
+    },
+    "cash_end": {
+      "keywords": [
+        "è´§å¸èµé",
+        "ç°éåç°éç­ä»·ç©"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢"
+    },
+    "inventory_begin": {
+      "keywords": [
+        "å­è´§"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "å¹´åä½é¢"
+    },
+    "inventory_end": {
+      "keywords": [
+        "å­è´§"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢"
+    },
+    "ar_begin": {
+      "keywords": [
+        "åºæ¶è´¦æ¬¾",
+        "åºæ¶å¸æ¬¾"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "å¹´åä½é¢"
+    },
+    "ar_end": {
+      "keywords": [
+        "åºæ¶è´¦æ¬¾",
+        "åºæ¶å¸æ¬¾"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢"
+    },
+    "liabilities_total_end": {
+      "keywords": [
+        "è´åºåè®¡",
+        "è´åºæ»è®¡",
+        "è´åºæ»é¢"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢"
+    },
+    "current_liabilities_end": {
+      "keywords": [
+        "æµå¨è´åºåè®¡",
+        "æµå¨è´åºæ»è®¡"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢"
+    },
+    "equity_total_end": {
+      "keywords": [
+        "ææèæçåè®¡",
+        "è¡ä¸æçåè®¡",
+        "æçåè®¡"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢"
+    },
+    "revenue_m": {
+      "keywords": [
+        "è¥ä¸æ¶å¥",
+        "ä¸»è¥ä¸å¡æ¶å¥"
+      ],
+      "sheet_type": "å©æ¶¦è¡¨",
+      "time_attr": "æ¬æéé¢"
+    },
+    "revenue_ytd": {
+      "keywords": [
+        "è¥ä¸æ¶å¥",
+        "ä¸»è¥ä¸å¡æ¶å¥"
+      ],
+      "sheet_type": "å©æ¶¦è¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "main_revenue_ytd": {
+      "keywords": [
+        "ä¸»è¥ä¸å¡æ¶å¥"
+      ],
+      "sheet_type": "å©æ¶¦è¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "cost_ytd": {
+      "keywords": [
+        "è¥ä¸ææ¬",
+        "ä¸»è¥ä¸å¡ææ¬"
+      ],
+      "sheet_type": "å©æ¶¦è¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "operating_profit_ytd": {
+      "keywords": [
+        "è¥ä¸å©æ¶¦"
+      ],
+      "sheet_type": "å©æ¶¦è¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "net_profit_ytd": {
+      "keywords": [
+        "åå©æ¶¦"
+      ],
+      "sheet_type": "å©æ¶¦è¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "rd_m": {
+      "keywords": [
+        "ç åè´¹ç¨"
+      ],
+      "sheet_type": "å©æ¶¦è¡¨",
+      "time_attr": "æ¬æéé¢"
+    },
+    "rd_ytd": {
+      "keywords": [
+        "ç åè´¹ç¨"
+      ],
+      "sheet_type": "å©æ¶¦è¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "operating_cf_ytd": {
+      "keywords": [
+        "ç»è¥æ´»å¨äº§ççç°éæµéåé¢",
+        "ç»è¥æ´»å¨ç°éæµéåé¢"
+      ],
+      "sheet_type": "ç°éæµéè¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "investing_cf_ytd": {
+      "keywords": [
+        "æèµæ´»å¨äº§ççç°éæµéåé¢",
+        "æèµæ´»å¨ç°éæµéåé¢"
+      ],
+      "sheet_type": "ç°éæµéè¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "financing_cf_ytd": {
+      "keywords": [
+        "ç­¹èµæ´»å¨äº§ççç°éæµéåé¢",
+        "ç­¹èµæ´»å¨ç°éæµéåé¢"
+      ],
+      "sheet_type": "ç°éæµéè¡¨",
+      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+    },
+    "products_begin": {
+      "keywords": [
+        "äº§æå(åºå­åå)",
+        "äº§æå",
+        "åºå­åå"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "å¹´åä½é¢",
+      "category": "èµäº§"
+    },
+    "products_end": {
+      "keywords": [
+        "äº§æå(åºå­åå)",
+        "äº§æå",
+        "åºå­åå"
+      ],
+      "sheet_type": "èµäº§è´åºè¡¨",
+      "time_attr": "ææ«ä½é¢",
+      "category": "èµäº§"
+    }
+  },
+  "metrics": [
+    {
+      "name": "æµå¨æ¯ç",
+      "formula": "safe_div(current_assets_end, current_liabilities_end)",
+      "format": "percent"
+    },
+    {
+      "name": "éå¨æ¯ç",
+      "formula": "safe_div(current_assets_end - inventory_end, current_liabilities_end)",
+      "format": "percent"
+    },
+    {
+      "name": "ç°éæ¯ç",
+      "formula": "safe_div(cash_end, current_liabilities_end)",
+      "format": "percent"
+    },
+    {
+      "name": "èµäº§è´åºç",
+      "formula": "safe_div(liabilities_total_end, assets_total_end)",
+      "format": "percent"
+    },
+    {
+      "name": "äº§ææ¯ç",
+      "formula": "safe_div(liabilities_total_end, equity_total_end)",
+      "format": "percent"
+    },
+    {
+      "name": "æçä¹æ°",
+      "formula": "safe_div(assets_total_end, equity_total_end)",
+      "format": "percent"
+    },
+    {
+      "name": "æ¯å©ç",
+      "formula": "safe_div(revenue_ytd - cost_ytd, revenue_ytd)",
+      "format": "percent"
+    },
+    {
+      "name": "è¥ä¸å©æ¶¦ç",
+      "formula": "safe_div(operating_profit_ytd, revenue_ytd)",
+      "format": "percent"
+    },
+    {
+      "name": "åå©ç",
+      "formula": "safe_div(net_profit_ytd, revenue_ytd)",
+      "format": "percent"
+    },
+    {
+      "name": "ROE(åèµäº§æ¶çç)",
+      "formula": "safe_div(net_profit_ytd, equity_total_end)",
+      "format": "percent"
+    },
+    {
+      "name": "ROA(æ»èµäº§æ¶çç)",
+      "formula": "safe_div(net_profit_ytd, assets_total_end)",
+      "format": "percent"
+    },
+    {
+      "name": "ç»è¥æ´»å¨ç°éæµåé¢",
+      "formula": "operating_cf_ytd",
+      "format": "number"
+    },
+    {
+      "name": "æèµæ´»å¨ç°éæµåé¢",
+      "formula": "investing_cf_ytd",
+      "format": "number"
+    },
+    {
+      "name": "ç­¹èµæ´»å¨ç°éæµåé¢",
+      "formula": "financing_cf_ytd",
+      "format": "number"
+    },
+    {
+      "name": "ç°éæµéæ¯ç",
+      "formula": "safe_div(operating_cf_ytd, current_liabilities_end)",
+      "format": "percent"
+    },
+    {
+      "name": "å½æç åæå¥å¼ºåº¦",
+      "formula": "safe_div(rd_m, revenue_m)",
+      "format": "percent"
+    },
+    {
+      "name": "æ¬å¹´ç åæå¥å¼ºåº¦",
+      "formula": "safe_div(rd_ytd, revenue_ytd)",
+      "format": "percent"
+    },
+    {
+      "name": "æ¬å¹´ç°ä»·å·¥ä¸æ»äº§å¼",
+      "formula": "(main_revenue_ytd or 0.0) + (products_end - products_begin)",
+      "format": "number"
+    },
+    {
+      "name": "åºæ¶è´¦æ¬¾å¨è½¬ç",
+      "formula": "safe_div(revenue_ytd, ar_begin + ar_end)",
+      "format": "round2"
+    },
+    {
+      "name": "å­è´§å¨è½¬ç",
+      "formula": "safe_div(cost_ytd, inventory_begin + inventory_end)",
+      "format": "round2"
+    }
+  ]
+}

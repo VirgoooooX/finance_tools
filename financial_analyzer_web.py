@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import json
 import queue
 import threading
 import logging
@@ -386,6 +387,62 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         cfg = runner.set_config(data)
         return asdict(cfg)
 
+    @app.get("/api/config/queries")
+    def api_get_saved_queries() -> Dict[str, Any]:
+        return getattr(runner.cfg, "saved_queries", {})
+
+    @app.post("/api/config/queries/{name}")
+    def api_save_query(name: str, query: Dict[str, Any]) -> Dict[str, Any]:
+        if not getattr(runner.cfg, "saved_queries", None):
+            setattr(runner.cfg, "saved_queries", {})
+        runner.cfg.saved_queries[name] = query
+        save_config(runner.config_path, runner.cfg)
+        return {"status": "ok", "saved_queries": runner.cfg.saved_queries}
+
+    @app.delete("/api/config/queries/{name}")
+    def api_delete_query(name: str) -> Dict[str, Any]:
+        sq = getattr(runner.cfg, "saved_queries", {})
+        if sq and name in sq:
+            del sq[name]
+            save_config(runner.config_path, runner.cfg)
+        return {"status": "ok", "saved_queries": sq}
+
+    @app.get("/api/rules")
+    def api_get_rules() -> Dict[str, Any]:
+        try:
+            import financial_analyzer_core as core
+
+            rules = core._load_rules()
+            path = os.path.join(get_base_dir(), "config", "rules.json")
+            return _sanitize_json({"ok": True, "path": path, "rules": rules})
+        except Exception as e:
+            return {"ok": False, "message": str(e), "rules": {}}
+
+    @app.post("/api/rules")
+    def api_save_rules(payload: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            import financial_analyzer_core as core
+
+            rules_obj: Any = payload.get("rules") if isinstance(payload, dict) and "rules" in payload else payload
+            if not isinstance(rules_obj, dict):
+                return {"ok": False, "message": "rules 必须是 JSON 对象(dict)"}
+
+            path = os.path.join(get_base_dir(), "config", "rules.json")
+            os.makedirs(os.path.dirname(path) or os.getcwd(), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(rules_obj, f, ensure_ascii=False, indent=2)
+
+            try:
+                core._RULES_CACHE["mtime"] = None
+                core._RULES_CACHE["data"] = None
+                core._RULES_CACHE["aliases"] = None
+            except Exception:
+                pass
+
+            return {"ok": True, "path": path}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
     @app.post("/api/scan")
     def api_scan() -> Dict[str, Any]:
         files = runner.scan()
@@ -457,6 +514,109 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         opts["rows"] = int(len(df))
         return _sanitize_json(opts)
 
+    @app.get("/api/validation/query")
+    def api_validation_query(
+        min_diff: Optional[float] = None,
+        max_diff: Optional[float] = None,
+        source_file: str = "",
+        is_balanced: str = "",  # "是" or "否" or ""
+        limit: int = 200,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        if not runner.last_result or not runner.last_result.cleaned_sqlite_path:
+            return {"status": "error", "message": "No database available"}
+        
+        db_path = runner.last_result.cleaned_sqlite_path
+        if not os.path.exists(db_path):
+            return {"status": "error", "message": "Database file not found"}
+
+        try:
+            with sqlite3.connect(db_path) as conn:
+                # Check if validation table exists
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='validation'")
+                if not cursor.fetchone():
+                    return {"status": "ok", "data": [], "total": 0}
+
+                where_clauses = []
+                params = []
+
+                if min_diff is not None:
+                    where_clauses.append("CAST(差额 AS FLOAT) >= ?")
+                    params.append(min_diff)
+                
+                if max_diff is not None:
+                    where_clauses.append("CAST(差额 AS FLOAT) <= ?")
+                    params.append(max_diff)
+
+                if source_file:
+                    where_clauses.append("源文件 LIKE ?")
+                    params.append(f"%{source_file}%")
+
+                if is_balanced:
+                    where_clauses.append("是否平衡 = ?")
+                    params.append(is_balanced)
+                else:
+                    # Default to showing only unbalanced if not specified? 
+                    # No, let frontend decide. But typically we query for exceptions.
+                    pass
+
+                where_str = " AND ".join(where_clauses) if where_clauses else "1=1"
+                
+                # Count total
+                count_sql = f"SELECT COUNT(*) FROM validation WHERE {where_str}"
+                cursor.execute(count_sql, params)
+                total = cursor.fetchone()[0]
+
+                # Query data
+                # Sort by difference descending by default
+                sql = f"SELECT * FROM validation WHERE {where_str} ORDER BY CAST(差额 AS FLOAT) DESC LIMIT ? OFFSET ?"
+                df = pd.read_sql_query(sql, conn, params=params + [limit, offset])
+                
+                records = df.to_dict(orient="records")
+                return {"status": "ok", "data": records, "total": total}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+
+    @app.get("/api/validation/summary")
+    def api_validation_summary() -> Dict[str, Any]:
+        if not runner.last_result or not runner.last_result.cleaned_sqlite_path:
+            return {"status": "error", "message": "No database available"}
+        
+        db_path = runner.last_result.cleaned_sqlite_path
+        if not os.path.exists(db_path):
+            return {"status": "error", "message": "Database file not found"}
+
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='validation'")
+                if not cursor.fetchone():
+                    return {"status": "ok", "data": []}
+
+                # Aggregate query matching the Excel logic
+                # Group by 源文件, 日期, 验证项目
+                sql = """
+                    SELECT 
+                        源文件, 
+                        日期, 
+                        验证项目, 
+                        COUNT(*) as 总条数,
+                        SUM(CASE WHEN 是否平衡 = '否' THEN 1 ELSE 0 END) as 不平衡条数,
+                        MAX(CAST(差额 AS FLOAT)) as 最大差额,
+                        AVG(CAST(差额 AS FLOAT)) as 平均差额
+                    FROM validation
+                    GROUP BY 源文件, 日期, 验证项目
+                    ORDER BY 不平衡条数 DESC, 最大差额 DESC
+                """
+                df = pd.read_sql_query(sql, conn)
+                records = df.to_dict(orient="records")
+                return {"status": "ok", "data": records}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+
     @app.get("/api/cleaned/query")
     def api_cleaned_query(
         q: str = "",
@@ -468,9 +628,14 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         time_attr: str = "",
         min_amount: Optional[float] = None,
         max_amount: Optional[float] = None,
+        sort_by: str = "金额",
+        sort_dir: str = "desc",
+        topn: Optional[int] = None,
         limit: int = 200,
         offset: int = 0,
+        group_by: str = "",
     ) -> Dict[str, Any]:
+        allowed_cols = {"源文件", "日期", "报表类型", "大类", "科目", "时间属性", "金额", "来源Sheet"}
         if runner._sqlite_is_available():
             sp = runner._get_cleaned_sqlite_path()
             try:
@@ -494,10 +659,17 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                     add_eq("大类", category)
                     add_eq("时间属性", time_attr)
 
-                    kw = (subject or q or "").strip()
-                    if kw:
-                        where.append('LOWER(CAST("科目" AS TEXT)) LIKE ?')
-                        params.append(f"%{kw.lower()}%")
+                    kw_input = (subject or q or "").strip()
+                    if kw_input:
+                        import re
+                        keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
+                        if keywords:
+                            or_clauses = []
+                            for k in keywords:
+                                or_clauses.append('LOWER(CAST("科目" AS TEXT)) LIKE ?')
+                                params.append(f"%{k.lower()}%")
+                            if or_clauses:
+                                where.append(f"({' OR '.join(or_clauses)})")
 
                     if min_amount is not None:
                         try:
@@ -513,22 +685,51 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                             pass
 
                     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+                    
+                    s_col = str(sort_by or "").strip()
+                    s_dir = str(sort_dir or "").strip().lower()
+                    
+                    g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in allowed_cols]
+                    
+                    if g_cols:
+                        g_str = ", ".join([f'"{c}"' for c in g_cols])
+                        base_sql = f'SELECT {g_str}, SUM("金额") as "金额", COUNT(*) as "条数" FROM cleaned' + where_sql + f' GROUP BY {g_str}'
+                        count_sql = f'SELECT COUNT(*) FROM (SELECT {g_str} FROM cleaned {where_sql} GROUP BY {g_str})'
+                        
+                        order_sql = ""
+                        if s_col == "金额":
+                            order_sql = f' ORDER BY SUM("金额") {"ASC" if s_dir == "asc" else "DESC"}'
+                        elif s_col == "条数":
+                            order_sql = f' ORDER BY COUNT(*) {"ASC" if s_dir == "asc" else "DESC"}'
+                        elif s_col in allowed_cols:
+                            order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
+                    else:
+                        base_sql = "SELECT * FROM cleaned" + where_sql
+                        count_sql = "SELECT COUNT(*) FROM cleaned" + where_sql
+                        order_sql = ""
+                        if s_col in allowed_cols:
+                            order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
+
                     total = 0
                     try:
-                        cur = conn.execute("SELECT COUNT(*) FROM cleaned" + where_sql, params)
+                        cur = conn.execute(count_sql, params)
                         row = cur.fetchone()
                         total = int(row[0]) if row else 0
                     except Exception:
                         total = 0
 
                     lim = int(max(1, min(int(limit or 200), 2000)))
+                    if topn is not None:
+                        try:
+                            lim = int(max(1, min(int(topn), 2000)))
+                        except Exception:
+                            pass
+                        offset = 0
                     off = int(max(0, int(offset or 0)))
                     rows: List[Dict[str, Any]] = []
                     try:
-                        cur = conn.execute(
-                            "SELECT * FROM cleaned" + where_sql + " LIMIT ? OFFSET ?",
-                            params + [lim, off],
-                        )
+                        final_sql = base_sql + order_sql + " LIMIT ? OFFSET ?"
+                        cur = conn.execute(final_sql, params + [lim, off])
                         cols = [d[0] for d in (cur.description or [])]
                         fetched = cur.fetchall()
                         rows = [dict(zip(cols, r)) for r in fetched]
@@ -544,6 +745,8 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                             "limit": lim,
                             "offset": off,
                             "rows": rows,
+                            "sort_by": s_col,
+                            "sort_dir": "asc" if s_dir == "asc" else "desc",
                         }
                     )
                 finally:
@@ -572,9 +775,15 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         _filt_eq("大类", category)
         _filt_eq("时间属性", time_attr)
 
-        kw = (subject or q or "").strip()
-        if kw and "科目" in view.columns:
-            view = view[view["科目"].astype(str).str.contains(kw, case=False, na=False)]
+        kw_input = (subject or q or "").strip()
+        if kw_input and "科目" in view.columns:
+            import re
+            keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
+            if keywords:
+                # pandas multiple contains logic (OR)
+                # escape regex chars just in case, though user likely inputs plain text
+                pattern = "|".join([re.escape(k) for k in keywords])
+                view = view[view["科目"].astype(str).str.contains(pattern, case=False, na=False)]
 
         if min_amount is not None and "金额" in view.columns:
             try:
@@ -586,9 +795,40 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                 view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) <= float(max_amount)]
             except Exception:
                 pass
+        
+        g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in view.columns]
+        if g_cols:
+            try:
+                # Group by
+                view = view.assign(
+                    金额=pd.to_numeric(view["金额"], errors="coerce").fillna(0)
+                ).groupby(g_cols).agg(
+                    金额=("金额", "sum"),
+                    条数=("金额", "count")
+                ).reset_index()
+            except Exception:
+                pass
+
+        s_col = str(sort_by or "").strip()
+        s_dir = str(sort_dir or "").strip().lower()
+        if s_col and s_col in view.columns:
+            ascending = True if s_dir == "asc" else False
+            try:
+                if s_col == "金额":
+                    view = view.assign(__amt=pd.to_numeric(view["金额"], errors="coerce").fillna(0)).sort_values("__amt", ascending=ascending).drop(columns=["__amt"])
+                else:
+                    view = view.sort_values(s_col, ascending=ascending)
+            except Exception:
+                pass
 
         total = int(len(view))
         lim = int(max(1, min(int(limit or 200), 2000)))
+        if topn is not None:
+            try:
+                lim = int(max(1, min(int(topn), 2000)))
+            except Exception:
+                pass
+            offset = 0
         off = int(max(0, int(offset or 0)))
         page = view.iloc[off : off + lim].copy()
         records = page.to_dict(orient="records")
@@ -599,7 +839,217 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             "limit": lim,
             "offset": off,
             "rows": records,
+            "sort_by": s_col,
+            "sort_dir": "asc" if s_dir == "asc" else "desc",
         })
+
+    @app.get("/api/cleaned/export")
+    def api_cleaned_export(
+        q: str = "",
+        subject: str = "",
+        source_file: str = "",
+        date: str = "",
+        report_type: str = "",
+        category: str = "",
+        time_attr: str = "",
+        min_amount: Optional[float] = None,
+        max_amount: Optional[float] = None,
+        sort_by: str = "金额",
+        sort_dir: str = "desc",
+        topn: Optional[int] = None,
+        group_by: str = "",
+        format: str = "csv",
+    ):
+        import io, csv
+        is_xlsx = (format or "").lower() == "xlsx"
+        ext = "xlsx" if is_xlsx else "csv"
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if is_xlsx else "text/csv"
+        filename = f"cleaned_export.{ext}"
+
+        allowed_cols = {"源文件", "日期", "报表类型", "大类", "科目", "时间属性", "金额", "来源Sheet"}
+
+        if runner._sqlite_is_available():
+            sp = runner._get_cleaned_sqlite_path()
+            try:
+                conn = sqlite3.connect(sp, check_same_thread=False)
+                try:
+                    where: List[str] = []
+                    params: List[Any] = []
+                    def add_eq(col: str, val: str) -> None:
+                        if val is None:
+                            return
+                        v = str(val).strip()
+                        if not v:
+                            return
+                        where.append(f'"{col}" = ?')
+                        params.append(v)
+                    add_eq("源文件", source_file)
+                    add_eq("日期", date)
+                    add_eq("报表类型", report_type)
+                    add_eq("大类", category)
+                    add_eq("时间属性", time_attr)
+                    kw_input = (subject or q or "").strip()
+                    if kw_input:
+                        import re
+                        keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
+                        if keywords:
+                            or_clauses = []
+                            for k in keywords:
+                                or_clauses.append('LOWER(CAST("科目" AS TEXT)) LIKE ?')
+                                params.append(f"%{k.lower()}%")
+                            if or_clauses:
+                                where.append(f"({' OR '.join(or_clauses)})")
+                    if min_amount is not None:
+                        try:
+                            where.append('"金额" >= ?')
+                            params.append(float(min_amount))
+                        except Exception:
+                            pass
+                    if max_amount is not None:
+                        try:
+                            where.append('"金额" <= ?')
+                            params.append(float(max_amount))
+                        except Exception:
+                            pass
+                    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+                    
+                    s_col = str(sort_by or "").strip()
+                    s_dir = str(sort_dir or "").strip().lower()
+
+                    g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in allowed_cols]
+                    
+                    if g_cols:
+                        g_str = ", ".join([f'"{c}"' for c in g_cols])
+                        base_sql = f'SELECT {g_str}, SUM("金额") as "金额", COUNT(*) as "条数" FROM cleaned' + where_sql + f' GROUP BY {g_str}'
+                        
+                        order_sql = ""
+                        if s_col == "金额":
+                            order_sql = f' ORDER BY SUM("金额") {"ASC" if s_dir == "asc" else "DESC"}'
+                        elif s_col == "条数":
+                            order_sql = f' ORDER BY COUNT(*) {"ASC" if s_dir == "asc" else "DESC"}'
+                        elif s_col in allowed_cols:
+                            order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
+                    else:
+                        base_sql = "SELECT * FROM cleaned" + where_sql
+                        order_sql = ""
+                        if s_col in allowed_cols:
+                            order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
+
+                    cap = 50000
+                    if topn is not None:
+                        try:
+                            cap = int(max(1, min(int(topn), 50000)))
+                        except Exception:
+                            pass
+                    
+                    cur = conn.execute(
+                        base_sql + order_sql + " LIMIT ?",
+                        params + [cap],
+                    )
+                    cols = [d[0] for d in (cur.description or [])]
+                    fetched = cur.fetchall()
+                    
+                    if is_xlsx:
+                        output = io.BytesIO()
+                        try:
+                            df = pd.DataFrame([list(r) for r in fetched], columns=cols)
+                            df.to_excel(output, index=False)
+                            content = output.getvalue()
+                        except Exception as e:
+                            return Response(str(e), media_type="text/plain", status_code=500)
+                    else:
+                        output = io.StringIO()
+                        writer = csv.writer(output)
+                        writer.writerow(cols)
+                        for r in fetched:
+                            writer.writerow(list(r))
+                        content = output.getvalue()
+                        output.close()
+                    
+                    return Response(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            except Exception as e:
+                return Response(str(e), media_type="text/plain", status_code=500)
+        try:
+            df = runner.load_cleaned_df(force_reload=False)
+        except Exception as e:
+            return Response(str(e), media_type="text/plain", status_code=500)
+        view = df
+        def _filt_eq(col: str, val: str) -> None:
+            nonlocal view
+            if not val:
+                return
+            if col in view.columns:
+                view = view[view[col].astype(str) == str(val)]
+        _filt_eq("源文件", source_file)
+        _filt_eq("日期", date)
+        _filt_eq("报表类型", report_type)
+        _filt_eq("大类", category)
+        _filt_eq("时间属性", time_attr)
+        kw = (subject or q or "").strip()
+        if kw and "科目" in view.columns:
+            view = view[view["科目"].astype(str).str.contains(kw, case=False, na=False)]
+        if min_amount is not None and "金额" in view.columns:
+            try:
+                view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) >= float(min_amount)]
+            except Exception:
+                pass
+        if max_amount is not None and "金额" in view.columns:
+            try:
+                view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) <= float(max_amount)]
+            except Exception:
+                pass
+        
+        g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in view.columns]
+        if g_cols:
+            try:
+                # Group by
+                view = view.assign(
+                    金额=pd.to_numeric(view["金额"], errors="coerce").fillna(0)
+                ).groupby(g_cols).agg(
+                    金额=("金额", "sum"),
+                    条数=("金额", "count")
+                ).reset_index()
+            except Exception:
+                pass
+
+        s_col = str(sort_by or "").strip()
+        s_dir = str(sort_dir or "").strip().lower()
+        if s_col and s_col in view.columns:
+            ascending = True if s_dir == "asc" else False
+            try:
+                if s_col == "金额":
+                    view = view.assign(__amt=pd.to_numeric(view["金额"], errors="coerce").fillna(0)).sort_values("__amt", ascending=ascending).drop(columns=["__amt"])
+                else:
+                    view = view.sort_values(s_col, ascending=ascending)
+            except Exception:
+                pass
+        cap = 50000
+        if topn is not None:
+            try:
+                cap = int(max(1, min(int(topn), 50000)))
+            except Exception:
+                pass
+        
+        if is_xlsx:
+            output = io.BytesIO()
+            try:
+                view.head(cap).to_excel(output, index=False)
+                content = output.getvalue()
+            finally:
+                output.close()
+        else:
+            output = io.StringIO()
+            try:
+                view.head(cap).to_csv(output, index=False)
+                content = output.getvalue()
+            finally:
+                output.close()
+        return Response(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     @app.post("/api/open")
     def api_open(payload: Dict[str, Any]) -> Dict[str, Any]:

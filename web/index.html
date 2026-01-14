@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>财务数据分析</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-  <link href="/static/styles.css?v=4" rel="stylesheet">
+  <link href="/static/styles.css?v=5" rel="stylesheet">
 </head>
 <body>
   
@@ -14,6 +14,15 @@
     <div class="brand">
       <i class="bi bi-pie-chart-fill"></i>
       <span>财务数据分析</span>
+    </div>
+
+    <div class="nav-tabs-custom" id="tabs">
+      <button class="nav-tab active" data-tab="tab-config"><i class="bi bi-sliders"></i>配置</button>
+      <button class="nav-tab" data-tab="tab-query"><i class="bi bi-search"></i>查询</button>
+      <button class="nav-tab" data-tab="tab-run"><i class="bi bi-play-circle"></i>运行</button>
+      <button class="nav-tab" data-tab="tab-logs"><i class="bi bi-journal-text"></i>日志</button>
+      <button class="nav-tab" data-tab="tab-results"><i class="bi bi-table"></i>结果</button>
+      <button class="nav-tab" data-tab="tab-rules"><i class="bi bi-braces"></i>规则</button>
     </div>
     
     <div class="header-controls">
@@ -34,14 +43,6 @@
 
   <div class="app-container">
     
-    <div class="nav-tabs-custom" id="tabs">
-      <button class="nav-tab active" data-tab="tab-config"><i class="bi bi-sliders"></i>配置</button>
-      <button class="nav-tab" data-tab="tab-query"><i class="bi bi-search"></i>查询</button>
-      <button class="nav-tab" data-tab="tab-run"><i class="bi bi-play-circle"></i>运行</button>
-      <button class="nav-tab" data-tab="tab-logs"><i class="bi bi-journal-text"></i>日志</button>
-      <button class="nav-tab" data-tab="tab-results"><i class="bi bi-table"></i>结果</button>
-    </div>
-
     <!-- Configuration Tab -->
     <div id="tab-config" class="tab-pane">
       <div class="grid grid-cols-3">
@@ -212,13 +213,39 @@
           <div class="d-flex gap-2">
              <button id="btnReloadQueryOptions" class="btn btn-secondary btn-sm">刷新选项</button>
              <button id="btnQuery" class="btn btn-primary btn-sm">执行查询</button>
+             <button id="btnExportCSV" class="btn btn-secondary btn-sm"><i class="bi bi-download"></i> 导出</button>
           </div>
         </div>
         <div class="card-body">
+          <div class="saved-queries-panel mb-4">
+            <div class="saved-queries-box">
+              <div class="saved-queries-head">
+                <div class="saved-queries-title">
+                  <i class="bi bi-bookmark-star"></i>
+                  <span>常用查询</span>
+                </div>
+                <div class="saved-queries-hint">保存/加载当前筛选条件</div>
+              </div>
+              <div class="saved-queries-grid">
+                <div class="saved-queries-row">
+                  <select id="savedQueriesSelect" class="form-select flex-1">
+                    <option value="">选择已保存的查询...</option>
+                  </select>
+                  <button id="btnLoadSavedQuery" class="btn btn-secondary btn-sm">加载</button>
+                  <button id="btnDeleteSavedQuery" class="btn btn-danger btn-sm" title="删除选中"><i class="bi bi-trash"></i></button>
+                </div>
+                <div class="saved-queries-row">
+                  <input id="newQueryName" class="form-control flex-1" placeholder="新查询名称">
+                  <button id="btnSaveCurrentQuery" class="btn btn-primary btn-sm"><i class="bi bi-save"></i> 保存当前</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="grid grid-cols-4">
              <div class="form-group" style="grid-column: span 2;">
-               <label class="form-label">科目包含</label>
-               <input id="qSubject" class="form-control" placeholder="例如：未分配利润 / 银行存款">
+               <label class="form-label">科目包含 <span class="badge badge-subtle" style="font-weight: normal; font-size: 0.75rem;">支持多词（空格分隔）</span></label>
+               <input id="qSubject" class="form-control" placeholder="例如：未分配利润 银行存款">
              </div>
              <div>
                <label class="form-label">金额范围 (最小)</label>
@@ -244,6 +271,53 @@
              <div>
                <label class="form-label">时间属性</label>
                <select id="qTimeAttr" class="form-select"></select>
+             </div>
+             <div>
+               <label class="form-label">排序字段</label>
+               <select id="qSortBy" class="form-select">
+                 <option value="金额">金额</option>
+                 <option value="日期">日期</option>
+                 <option value="报表类型">报表类型</option>
+                 <option value="大类">大类</option>
+                 <option value="科目">科目</option>
+                 <option value="源文件">源文件</option>
+                 <option value="来源Sheet">来源Sheet</option>
+                 <option value="时间属性">时间属性</option>
+               </select>
+             </div>
+             <div>
+               <label class="form-label">排序方向</label>
+               <select id="qSortDir" class="form-select">
+                 <option value="desc">降序</option>
+                 <option value="asc">升序</option>
+               </select>
+             </div>
+             <div>
+               <label class="form-label">TopN</label>
+               <input id="qTopN" class="form-control" placeholder="例如：100">
+             </div>
+             <div style="grid-column: span 4; margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+               <h3 style="font-size: 1rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.5rem;"><i class="bi bi-bar-chart-fill"></i> 汇总分析 & 导出</h3>
+             </div>
+             <div>
+               <label class="form-label">分组维度 (汇总)</label>
+               <select id="qGroupBy" class="form-select">
+                 <option value="">不分组</option>
+                 <option value="源文件">源文件</option>
+                 <option value="日期">日期</option>
+                 <option value="报表类型">报表类型</option>
+                 <option value="大类">大类</option>
+                 <option value="科目">科目</option>
+                 <option value="时间属性">时间属性</option>
+                 <option value="来源Sheet">来源Sheet</option>
+               </select>
+             </div>
+             <div>
+               <label class="form-label">导出格式</label>
+               <select id="qExportFormat" class="form-select">
+                 <option value="csv">CSV</option>
+                 <option value="xlsx">XLSX</option>
+               </select>
              </div>
           </div>
           
@@ -348,8 +422,38 @@
       </div>
 
       <div class="card">
+        <div class="card-header"><div class="card-title">验证汇总 (Validation Summary)</div></div>
+        <div class="table-container" style="border:none; box-shadow:none;">
+           <table class="financial-table">
+             <thead>
+               <tr>
+                 <th>源文件</th>
+                 <th>日期</th>
+                 <th>验证项目</th>
+                 <th>总条数</th>
+                 <th>不平衡条数</th>
+                 <th>最大差额</th>
+                 <th>平均差额</th>
+               </tr>
+             </thead>
+             <tbody id="validationSummaryBody"></tbody>
+           </table>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-header">
-           <div class="card-title" style="color: var(--danger);">不平衡记录预览 (Top 200)</div>
+           <div class="card-title" style="color: var(--danger);">不平衡记录查询</div>
+           <div class="d-flex gap-2 align-items-center">
+             <input id="vMinDiff" class="form-control form-control-sm" placeholder="最小差额" style="width: 100px;">
+             <input id="vSourceFile" class="form-control form-control-sm" placeholder="源文件" style="width: 150px;">
+             <select id="vIsBalanced" class="form-select form-select-sm" style="width: 100px;">
+               <option value="">全部</option>
+               <option value="否" selected>不平衡</option>
+               <option value="是">平衡</option>
+             </select>
+             <button id="btnQueryValidation" class="btn btn-primary btn-sm"><i class="bi bi-search"></i> 查询</button>
+           </div>
         </div>
         <div class="table-container" style="border:none; box-shadow:none;">
            <table class="financial-table">
@@ -389,6 +493,110 @@
       </div>
     </div>
 
+    <!-- Rules Tab -->
+    <div id="tab-rules" class="tab-pane d-none">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-braces"></i>rules.json 可视化编辑</div>
+          <div class="d-flex gap-2">
+            <button id="btnRulesReload" class="btn btn-secondary btn-sm"><i class="bi bi-arrow-clockwise"></i>重载</button>
+            <button id="btnRulesSave" class="btn btn-primary btn-sm"><i class="bi bi-save"></i>保存</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="nav-tabs-custom" id="rulesSubTabs" style="margin-bottom: 1rem;">
+            <button class="nav-tab active" data-rules-tab="rules-pane-aliases"><i class="bi bi-signpost-split"></i>科目同义词</button>
+            <button class="nav-tab" data-rules-tab="rules-pane-vars"><i class="bi bi-sliders2"></i>变量</button>
+            <button class="nav-tab" data-rules-tab="rules-pane-metrics"><i class="bi bi-calculator"></i>指标计算</button>
+            <button class="nav-tab" data-rules-tab="rules-pane-json"><i class="bi bi-code-slash"></i>高级 JSON</button>
+            <span id="rulesPathText" class="badge badge-subtle text-mono" style="max-width: 60ch; overflow:hidden; text-overflow: ellipsis; align-self: center;"></span>
+          </div>
+
+          <div id="rules-pane-aliases" class="rules-pane">
+            <div class="card" style="margin:0">
+              <div class="card-header">
+                <div class="card-title">科目同义词（用于更稳的关键词匹配）</div>
+                <button id="btnRulesAddAlias" class="btn btn-secondary btn-sm"><i class="bi bi-plus"></i>新增</button>
+              </div>
+              <div class="table-container" style="border:none; box-shadow:none;">
+                <table class="financial-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 30%;">规范名</th>
+                      <th>同义词（逗号/空格分隔）</th>
+                      <th style="width: 90px;"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="rulesAliasesBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div id="rules-pane-vars" class="rules-pane d-none">
+            <div class="card" style="margin:0">
+              <div class="card-header">
+                <div class="card-title">变量（给指标计算引用）</div>
+                <button id="btnRulesAddVar" class="btn btn-secondary btn-sm"><i class="bi bi-plus"></i>新增</button>
+              </div>
+              <div class="table-container" style="border:none; box-shadow:none;">
+                <table class="financial-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 18%;">变量名</th>
+                      <th style="width: 30%;">科目关键词</th>
+                      <th style="width: 16%;">报表类型</th>
+                      <th style="width: 16%;">时间属性</th>
+                      <th style="width: 16%;">大类</th>
+                      <th style="width: 90px;"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="rulesVarsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div id="rules-pane-metrics" class="rules-pane d-none">
+            <div class="card" style="margin:0">
+              <div class="card-header">
+                <div class="card-title">指标计算（小白可用）</div>
+                <button id="btnRulesAddMetric" class="btn btn-secondary btn-sm"><i class="bi bi-plus"></i>新增</button>
+              </div>
+              <div class="table-container" style="border:none; box-shadow:none;">
+                <table class="financial-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 18%;">指标名称</th>
+                      <th>计算方式</th>
+                      <th style="width: 160px;">显示格式</th>
+                      <th style="width: 90px;"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="rulesMetricsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div id="rules-pane-json" class="rules-pane d-none">
+            <div class="card" style="margin:0">
+              <div class="card-header">
+                <div class="card-title">高级 JSON（直接编辑完整 rules.json）</div>
+                <div class="d-flex gap-2">
+                  <button id="btnRulesFormatJson" class="btn btn-secondary btn-sm"><i class="bi bi-code-slash"></i>格式化</button>
+                  <button id="btnRulesApplyJson" class="btn btn-secondary btn-sm"><i class="bi bi-arrow-repeat"></i>从 JSON 应用</button>
+                </div>
+              </div>
+              <div class="card-body" style="padding: 0;">
+                <textarea id="rulesJsonText" class="form-control text-mono" style="min-height: 520px; border:none; border-radius: 0 0 var(--radius-lg) var(--radius-lg);"></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
   
   <div style="display:none" id="hostInfo"></div>
@@ -398,6 +606,7 @@ let latestPaths = { cleaned: '', validation: '', metrics: '' };
 let es = null;
 let lastProgress = { current: 0, total: 1, detail: '' };
 let queryState = { offset: 0, limit: 200, total: 0 };
+let savedQueries = {};
 
 const PRESETS = {
   merge: { name: '合并', bs: 'BS-合并', pl: 'PL-合并', cf: 'CF-合并' },
@@ -423,6 +632,14 @@ function showTab(id) {
   document.querySelectorAll('#tabs .nav-tab').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-tab') === id);
   });
+  
+  if (id === 'tab-results') {
+      loadValidationSummary();
+      queryValidation(); // Load default view
+  }
+  if (id === 'tab-rules') {
+      loadRulesUI();
+  }
 }
 
 document.getElementById('tabs').addEventListener('click', (e) => {
@@ -433,6 +650,924 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 
 // Initialize first tab
 showTab('tab-config');
+
+let _rulesLoadedOnce = false;
+let _rulesState = { rules: null };
+
+function _splitList(s) {
+  const raw = (s || '').trim();
+  if (!raw) return [];
+  return raw.split(/[\s,，、;；|/]+/).map(x => (x || '').trim()).filter(Boolean);
+}
+
+function _escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function _showRulesSubPane(id) {
+  document.querySelectorAll('.rules-pane').forEach(el => {
+    el.classList.add('d-none');
+    el.style.display = 'none';
+  });
+  const target = document.getElementById(id);
+  if (target) {
+    target.classList.remove('d-none');
+    target.style.display = 'block';
+  }
+  document.querySelectorAll('#rulesSubTabs .nav-tab').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-rules-tab') === id);
+  });
+}
+
+document.getElementById('rulesSubTabs')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-rules-tab]');
+  if (!btn) return;
+  _showRulesSubPane(btn.getAttribute('data-rules-tab'));
+});
+
+function _buildVarHumanLabel(varName, vObj) {
+  const firstKw = Array.isArray(vObj?.keywords) && vObj.keywords.length ? String(vObj.keywords[0] || '').trim() : '';
+  const sheet = String(vObj?.sheet_type || '').trim();
+  const time = String(vObj?.time_attr || '').trim();
+  const category = String(vObj?.category || '').trim();
+  const parts = [];
+  if (firstKw) parts.push(firstKw);
+  if (time) parts.push(time);
+  const base = parts.length ? parts.join('·') : String(varName || '').trim();
+  return base;
+}
+
+function _getVarOptions(rules) {
+  const vars = (rules && rules.variables) ? rules.variables : {};
+  if (!vars || typeof vars !== 'object') return [];
+  return Object.keys(vars).sort().map(name => ({ value: name, label: _buildVarHumanLabel(name, vars[name] || {}) }));
+}
+
+function _ensureSelectOptions(sel, opts) {
+  if (!sel) return;
+  const keep = sel.value;
+  const existing = new Map();
+  Array.from(sel.options || []).forEach(o => existing.set(o.value, o));
+  if (!existing.has('')) {
+    const o0 = document.createElement('option');
+    o0.value = '';
+    o0.innerText = '请选择...';
+    sel.appendChild(o0);
+    existing.set('', o0);
+  }
+  for (const it of (opts || [])) {
+    const v = String(it.value || '');
+    const t = String(it.label || it.value || '');
+    const o = existing.get(v);
+    if (o) {
+      if (o.innerText !== t) o.innerText = t;
+    } else {
+      const nn = document.createElement('option');
+      nn.value = v;
+      nn.innerText = t;
+      sel.appendChild(nn);
+      existing.set(v, nn);
+    }
+  }
+  sel.value = keep;
+}
+
+function _splitTopLevelArgs(s) {
+  const out = [];
+  let cur = '';
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '(') depth++;
+    if (ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) {
+      out.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+function _tryParseMetricPattern(formula) {
+  const f = String(formula || '').trim();
+  if (!f) return null;
+  if (/^[a-zA-Z_]\w*$/.test(f)) {
+    return { tpl: 'A', a: f, b: '', c: '' };
+  }
+  if (/^safe_div\s*\(/.test(f) && /\)\s*$/.test(f)) {
+    const inner = f.replace(/^safe_div\s*\(/, '').replace(/\)\s*$/, '');
+    const args = _splitTopLevelArgs(inner);
+    if (args.length === 2 && /^[a-zA-Z_]\w*$/.test(args[1])) {
+      const denom = args[1];
+      const num = args[0];
+      if (/^[a-zA-Z_]\w*$/.test(num)) {
+        return { tpl: 'A_div_B', a: num, b: denom, c: '' };
+      }
+      const m2 = String(num).trim().match(/^([a-zA-Z_]\w*)\s*([\+\-\*])\s*([a-zA-Z_]\w*)$/);
+      if (m2) {
+        const a = m2[1], op = m2[2], b = m2[3];
+        if (op === '-') return { tpl: '(A_minus_B)_div_C', a, b, c: denom };
+        if (op === '+') return { tpl: '(A_plus_B)_div_C', a, b, c: denom };
+        if (op === '*') return { tpl: '(A_mul_B)_div_C', a, b, c: denom };
+      }
+    }
+  }
+  const m = f.match(/^([a-zA-Z_]\w*)\s*([\+\-\*])\s*([a-zA-Z_]\w*)$/);
+  if (m) {
+    const a = m[1], op = m[2], b = m[3];
+    if (op === '+') return { tpl: 'A_plus_B', a, b, c: '' };
+    if (op === '-') return { tpl: 'A_minus_B', a, b, c: '' };
+    if (op === '*') return { tpl: 'A_mul_B', a, b, c: '' };
+  }
+  return null;
+}
+
+function _stripOuterParens(s) {
+  let t = String(s || '').trim();
+  while (t.startsWith('(') && t.endsWith(')')) {
+    let depth = 0;
+    let ok = true;
+    for (let i = 0; i < t.length; i++) {
+      const ch = t[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0 && i !== t.length - 1) {
+          ok = false;
+          break;
+        }
+      }
+      if (depth < 0) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok && depth === 0) t = t.slice(1, -1).trim();
+    else break;
+  }
+  return t;
+}
+
+function _splitTopLevelByOperator(s, ops) {
+  const t = String(s || '');
+  let depth = 0;
+  for (let i = t.length - 1; i >= 0; i--) {
+    const ch = t[i];
+    if (ch === ')') depth++;
+    else if (ch === '(') depth--;
+    if (depth !== 0) continue;
+    if (!ops.includes(ch)) continue;
+    if (ch === '-') {
+      let j = i - 1;
+      while (j >= 0 && /\s/.test(t[j])) j--;
+      if (j < 0 || '+-*/(,'.includes(t[j])) continue;
+    }
+    if (ch === '+') {
+      let j = i - 1;
+      while (j >= 0 && /\s/.test(t[j])) j--;
+      if (j < 0 || '+-*/(,'.includes(t[j])) continue;
+    }
+    const left = t.slice(0, i).trim();
+    const right = t.slice(i + 1).trim();
+    if (!left || !right) continue;
+    return { op: ch, left, right };
+  }
+  return null;
+}
+
+function _buildVarExplainLabel(varName, vObj) {
+  const firstKw = Array.isArray(vObj?.keywords) && vObj.keywords.length ? String(vObj.keywords[0] || '').trim() : '';
+  const time = String(vObj?.time_attr || '').trim();
+  if (firstKw && time) return `${firstKw}${time}`;
+  if (firstKw) return firstKw;
+  if (time) return time;
+  return String(varName || '').trim();
+}
+
+function _explainExpr(expr, rules) {
+  let s = _stripOuterParens(String(expr || '').trim());
+  if (!s) return '';
+
+  const vars = (rules && rules.variables) ? rules.variables : {};
+  const labelOf = (k) => _buildVarExplainLabel(k, (vars && vars[k]) ? vars[k] : {});
+
+  if (/^[a-zA-Z_]\w*$/.test(s)) return labelOf(s);
+  if (/^[0-9]+(\.[0-9]+)?$/.test(s)) return s;
+
+  const mOr = s.match(/^(.+?)\s+or\s+0(\.0+)?\s*$/);
+  if (mOr) {
+    const left = _explainExpr(mOr[1], rules);
+    return left ? `${left}（缺失按0）` : '缺失按0';
+  }
+
+  if (/^safe_div\s*\(/.test(s) && /\)\s*$/.test(s)) {
+    const inner = s.replace(/^safe_div\s*\(/, '').replace(/\)\s*$/, '');
+    const args = _splitTopLevelArgs(inner);
+    if (args.length === 2) {
+      const a = _explainExpr(args[0], rules);
+      const b = _explainExpr(args[1], rules);
+      if (a && b) return `${a} ÷ ${b}`;
+    }
+  }
+
+  const addSub = _splitTopLevelByOperator(s, ['+', '-']);
+  if (addSub) {
+    const l = _explainExpr(addSub.left, rules);
+    const r = _explainExpr(addSub.right, rules);
+    const op = addSub.op === '+' ? ' + ' : ' - ';
+    if (l && r) return `${l}${op}${r}`;
+  }
+
+  const mulDiv = _splitTopLevelByOperator(s, ['*', '/']);
+  if (mulDiv) {
+    const l = _explainExpr(mulDiv.left, rules);
+    const r = _explainExpr(mulDiv.right, rules);
+    const op = mulDiv.op === '*' ? ' × ' : ' ÷ ';
+    if (l && r) return `${l}${op}${r}`;
+  }
+
+  if (vars && typeof vars === 'object') {
+    Object.keys(vars).sort((a, b) => b.length - a.length).forEach(k => {
+      const re = new RegExp(`\\b${k}\\b`, 'g');
+      s = s.replace(re, labelOf(k));
+    });
+  }
+  s = s.replace(/safe_div\s*\(/g, '除以(').replace(/\bor\b/g, '或').replace(/,/g, '，');
+  return s;
+}
+
+function _explainFormula(formula, rules) {
+  return _explainExpr(formula, rules);
+}
+
+function _isParensBalanced(s) {
+  let depth = 0;
+  for (const ch of String(s || '')) {
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0;
+}
+
+function _validateRulesObject(rules) {
+  const errs = [];
+  const obj = rules && typeof rules === 'object' ? rules : null;
+  if (!obj) return ['rules 必须是 JSON 对象'];
+
+  const sa = obj.subject_aliases;
+  if (sa != null) {
+    if (typeof sa !== 'object' || Array.isArray(sa)) errs.push('subject_aliases 必须是对象');
+    else {
+      for (const [k, v] of Object.entries(sa)) {
+        if (typeof k !== 'string' || !k.trim()) errs.push('subject_aliases 的键必须是非空字符串');
+        if (!Array.isArray(v)) errs.push(`subject_aliases.${k} 必须是数组`);
+      }
+    }
+  }
+
+  const vars = obj.variables;
+  if (vars != null) {
+    if (typeof vars !== 'object' || Array.isArray(vars)) errs.push('variables 必须是对象');
+    else {
+      for (const [k, v] of Object.entries(vars)) {
+        if (typeof k !== 'string' || !k.trim()) errs.push('variables 的变量名必须是非空字符串');
+        if (v != null && typeof v !== 'object') errs.push(`variables.${k} 必须是对象`);
+        if (v && v.keywords != null && !Array.isArray(v.keywords)) errs.push(`variables.${k}.keywords 必须是数组`);
+      }
+    }
+  }
+
+  const metrics = obj.metrics;
+  if (metrics != null) {
+    if (!Array.isArray(metrics)) errs.push('metrics 必须是数组');
+    else {
+      const allowedFns = new Set(['safe_div', 'abs', 'round', 'max', 'min']);
+      const allowedKw = new Set(['or', 'and', 'not', 'None', 'True', 'False']);
+      const varsSet = new Set(Object.keys((vars && typeof vars === 'object' && !Array.isArray(vars)) ? vars : {}));
+      for (const m of metrics) {
+        const name = String(m?.name || '').trim();
+        const formula = String(m?.formula || '').trim();
+        if (!name) errs.push('metrics 中存在缺少 name 的项');
+        if (!formula) errs.push(`指标「${name || '（未命名）'}」缺少 formula`);
+        if (formula) {
+          if (!_isParensBalanced(formula)) errs.push(`指标「${name || '（未命名）'}」公式括号不匹配`);
+          if (formula.includes('__') || /\bimport\b/.test(formula)) errs.push(`指标「${name || '（未命名）'}」公式包含不安全内容`);
+          const ids = formula.match(/[A-Za-z_]\w*/g) || [];
+          const unknown = Array.from(new Set(ids.filter(x => !allowedFns.has(x) && !allowedKw.has(x) && !varsSet.has(x))));
+          if (unknown.length) errs.push(`指标「${name || '（未命名）'}」公式引用未定义变量：${unknown.join(', ')}`);
+        }
+      }
+    }
+  }
+
+  return errs;
+}
+
+function _getFormulaVarDeps(formula, rules) {
+  const s = String(formula || '');
+  if (!s) return [];
+  const vars = (rules && rules.variables) ? rules.variables : {};
+  const varsSet = new Set(Object.keys((vars && typeof vars === 'object' && !Array.isArray(vars)) ? vars : {}));
+  const ids = s.match(/[A-Za-z_]\w*/g) || [];
+  const out = [];
+  for (const id of ids) {
+    if (!varsSet.has(id)) continue;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+function _jumpToVar(varName) {
+  const key = String(varName || '').trim();
+  if (!key) return;
+  _showRulesSubPane('rules-pane-vars');
+  const row = document.getElementById(`var-row-${key}`);
+  if (row) {
+    row.classList.remove('row-highlight');
+    void row.offsetWidth;
+    row.classList.add('row-highlight');
+    try { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch { row.scrollIntoView(); }
+  }
+}
+
+function _insertAtCursor(inputEl, text) {
+  const el = inputEl;
+  if (!el) return;
+  const t = String(text || '');
+  if (!t) return;
+  const start = (typeof el.selectionStart === 'number') ? el.selectionStart : (el.value || '').length;
+  const end = (typeof el.selectionEnd === 'number') ? el.selectionEnd : start;
+  const v = String(el.value || '');
+  el.value = v.slice(0, start) + t + v.slice(end);
+  const pos = start + t.length;
+  try {
+    el.selectionStart = pos;
+    el.selectionEnd = pos;
+    el.focus();
+  } catch {}
+}
+
+function _validateFormulaSingle(formula, rules) {
+  const errs = [];
+  const f = String(formula || '').trim();
+  if (!f) return ['公式不能为空'];
+  if (!_isParensBalanced(f)) errs.push('括号不匹配');
+  if (f.includes('__') || /\bimport\b/.test(f)) errs.push('包含不安全内容');
+  const allowedFns = new Set(['safe_div', 'abs', 'round', 'max', 'min']);
+  const allowedKw = new Set(['or', 'and', 'not', 'None', 'True', 'False']);
+  const vars = (rules && rules.variables) ? rules.variables : {};
+  const varsSet = new Set(Object.keys((vars && typeof vars === 'object' && !Array.isArray(vars)) ? vars : {}));
+  const ids = f.match(/[A-Za-z_]\w*/g) || [];
+  const unknown = Array.from(new Set(ids.filter(x => !allowedFns.has(x) && !allowedKw.has(x) && !varsSet.has(x))));
+  if (unknown.length) errs.push(`引用未定义变量：${unknown.join(', ')}`);
+  return errs;
+}
+
+function _metricFormatOptionsHtml(current) {
+  const v = String(current || '').trim() || 'number';
+  const o = (val, text) => `<option value="${val}"${v === val ? ' selected' : ''}>${text}</option>`;
+  return [
+    o('number', '数值'),
+    o('percent', '百分比'),
+    o('round2', '保留2位小数'),
+  ].join('');
+}
+
+function _metricTplOptionsHtml(current) {
+  const v = String(current || '').trim() || 'A_div_B';
+  const o = (val, text) => `<option value="${val}"${v === val ? ' selected' : ''}>${text}</option>`;
+  return [
+    o('A', '直接取值：A'),
+    o('A_div_B', '比率：A ÷ B'),
+    o('A_plus_B', '加：A + B'),
+    o('A_minus_B', '减：A - B'),
+    o('A_mul_B', '乘：A × B'),
+    o('(A_minus_B)_div_C', '比率：(A - B) ÷ C'),
+    o('(A_plus_B)_div_C', '比率：(A + B) ÷ C'),
+    o('(A_mul_B)_div_C', '比率：(A × B) ÷ C'),
+  ].join('');
+}
+
+function _updateMetricRow(tr, rules) {
+  if (!tr) return;
+  const name = (tr.querySelector('input[data-role="m_name"]')?.value || '').trim();
+  const raw = (tr.querySelector('input[data-role="m_formula_raw"]')?.value || '').trim();
+  const formula = raw;
+  const hidden = tr.querySelector('input[data-role="m_formula"]');
+  if (hidden) hidden.value = formula;
+
+  const hint = tr.querySelector('div[data-role="m_hint"]');
+  if (hint) {
+    const explain = _explainFormula(formula, rules);
+    if (name && explain) hint.innerText = `${name} = ${explain}`;
+    else if (explain) hint.innerText = `解释：${explain}`;
+    else hint.innerText = '';
+  }
+
+  const depsEl = tr.querySelector('div[data-role="m_deps"]');
+  if (depsEl) {
+    const deps = _getFormulaVarDeps(formula, rules);
+    if (!deps.length) {
+      depsEl.innerHTML = '';
+    } else {
+      const vars = (rules && rules.variables) ? rules.variables : {};
+      depsEl.innerHTML = `
+        <span class="badge badge-subtle">引用变量</span>
+        ${deps.map(v => {
+          const label = _escapeHtml(_buildVarHumanLabel(v, (vars && vars[v]) ? vars[v] : {}));
+          const key = _escapeHtml(v);
+          return `<span class="badge badge-subtle badge-click" data-role="m_dep" data-var="${key}" title="点击定位到变量取数">${label || key}</span>`;
+        }).join(' ')}
+      `;
+      depsEl.querySelectorAll('span[data-role="m_dep"]').forEach(s => {
+        s.addEventListener('click', () => _jumpToVar(s.getAttribute('data-var') || ''));
+      });
+    }
+  }
+}
+
+function _refreshMetricVarOptions(rules) {
+  const opts = _getVarOptions(rules);
+  const body = document.getElementById('rulesMetricsBody');
+  if (!body) return;
+  body.querySelectorAll('tr').forEach(tr => {
+    _ensureSelectOptions(tr.querySelector('select[data-role="m_ins_var"]'), opts);
+  });
+}
+
+function _syncRulesJsonFromTables() {
+  const rules = {
+    subject_aliases: {},
+    variables: {},
+    metrics: [],
+  };
+
+  const ab = document.getElementById('rulesAliasesBody');
+  if (ab) {
+    ab.querySelectorAll('tr').forEach(tr => {
+      const canon = (tr.querySelector('input[data-role="canon"]')?.value || '').trim();
+      const syns = (tr.querySelector('input[data-role="syns"]')?.value || '').trim();
+      if (!canon) return;
+      const arr = _splitList(syns);
+      rules.subject_aliases[canon] = arr;
+    });
+  }
+
+  const vb = document.getElementById('rulesVarsBody');
+  if (vb) {
+    vb.querySelectorAll('tr').forEach(tr => {
+      const name = (tr.querySelector('input[data-role="var_name"]')?.value || '').trim();
+      if (!name) return;
+      const keywords = _splitList(tr.querySelector('input[data-role="keywords"]')?.value || '');
+      const sheet_type = (tr.querySelector('input[data-role="sheet_type"]')?.value || '').trim();
+      const time_attr = (tr.querySelector('input[data-role="time_attr"]')?.value || '').trim();
+      const category = (tr.querySelector('input[data-role="category"]')?.value || '').trim();
+      const obj = {};
+      if (keywords.length) obj.keywords = keywords;
+      if (sheet_type) obj.sheet_type = sheet_type;
+      if (time_attr) obj.time_attr = time_attr;
+      if (category) obj.category = category;
+      rules.variables[name] = obj;
+    });
+  }
+
+  const mb = document.getElementById('rulesMetricsBody');
+  if (mb) {
+    mb.querySelectorAll('tr').forEach(tr => {
+      _updateMetricRow(tr, rules);
+      const name = (tr.querySelector('input[data-role="m_name"]')?.value || '').trim();
+      const formula = (tr.querySelector('input[data-role="m_formula"]')?.value || '').trim();
+      const format = (tr.querySelector('select[data-role="m_format"]')?.value || '').trim();
+      if (!name || !formula) return;
+      const obj = { name, formula };
+      if (format) obj.format = format;
+      rules.metrics.push(obj);
+    });
+  }
+
+  const ta = document.getElementById('rulesJsonText');
+  if (ta) ta.value = JSON.stringify(rules, null, 2);
+  _rulesState.rules = rules;
+  _refreshMetricVarOptions(rules);
+  const mb2 = document.getElementById('rulesMetricsBody');
+  if (mb2) mb2.querySelectorAll('tr').forEach(tr => _updateMetricRow(tr, rules));
+}
+
+function _addAliasRow(canon, syns) {
+  const body = document.getElementById('rulesAliasesBody');
+  if (!body) return;
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="form-control form-control-sm" data-role="canon" value="${_escapeHtml(canon || '')}"></td>
+    <td><input class="form-control form-control-sm" data-role="syns" value="${_escapeHtml(syns || '')}"></td>
+    <td class="text-right"><button class="btn btn-danger btn-sm" data-role="del"><i class="bi bi-trash"></i></button></td>
+  `;
+  tr.querySelectorAll('input').forEach(inp => inp.addEventListener('input', _syncRulesJsonFromTables));
+  tr.querySelector('button[data-role="del"]').addEventListener('click', () => {
+    tr.remove();
+    _syncRulesJsonFromTables();
+  });
+  body.appendChild(tr);
+}
+
+function _addVarRow(name, keywords, sheet_type, time_attr, category) {
+  const body = document.getElementById('rulesVarsBody');
+  if (!body) return;
+  const tr = document.createElement('tr');
+  const key = String(name || '').trim();
+  if (key) tr.id = `var-row-${key}`;
+  tr.innerHTML = `
+    <td><input class="form-control form-control-sm" data-role="var_name" value="${_escapeHtml(name || '')}"></td>
+    <td><input class="form-control form-control-sm" data-role="keywords" value="${_escapeHtml(keywords || '')}"></td>
+    <td><input class="form-control form-control-sm" data-role="sheet_type" value="${_escapeHtml(sheet_type || '')}"></td>
+    <td><input class="form-control form-control-sm" data-role="time_attr" value="${_escapeHtml(time_attr || '')}"></td>
+    <td><input class="form-control form-control-sm" data-role="category" value="${_escapeHtml(category || '')}"></td>
+    <td class="text-right"><button class="btn btn-danger btn-sm" data-role="del"><i class="bi bi-trash"></i></button></td>
+  `;
+  tr.querySelectorAll('input').forEach(inp => inp.addEventListener('input', _syncRulesJsonFromTables));
+  tr.querySelector('button[data-role="del"]').addEventListener('click', () => {
+    tr.remove();
+    _syncRulesJsonFromTables();
+  });
+  body.appendChild(tr);
+}
+
+function _addMetricRow(name, formula, format) {
+  const body = document.getElementById('rulesMetricsBody');
+  if (!body) return;
+  const tr = document.createElement('tr');
+  const fmt = (format || '').trim() || 'number';
+  tr.innerHTML = `
+    <td><input class="form-control form-control-sm" data-role="m_name" value="${_escapeHtml(name || '')}"></td>
+    <td>
+      <div class="d-flex gap-2 align-items-center" style="flex-wrap: wrap;">
+        <input class="form-control form-control-sm text-mono" data-role="m_formula_raw" value="${_escapeHtml(formula || '')}" placeholder="公式" style="min-width: 520px;">
+        <select class="form-select form-select-sm" data-role="m_ins_var" style="min-width: 260px;"></select>
+        <button class="btn btn-secondary btn-sm" data-role="m_ins_var_btn" type="button">插入变量</button>
+        <button class="btn btn-secondary btn-sm" data-role="m_ins_div_btn" type="button">插入 safe_div</button>
+        <button class="btn btn-secondary btn-sm" data-role="m_check_btn" type="button">校验公式</button>
+      </div>
+      <div data-role="m_hint" class="form-help" style="margin-top: 6px;"></div>
+      <div data-role="m_deps" class="d-flex gap-2 align-items-center" style="flex-wrap: wrap; margin-top: 6px;"></div>
+      <input type="hidden" data-role="m_formula" value="${_escapeHtml(formula || '')}">
+    </td>
+    <td><select class="form-select form-select-sm" data-role="m_format">${_metricFormatOptionsHtml(fmt)}</select></td>
+    <td class="text-right"><button class="btn btn-danger btn-sm" data-role="del"><i class="bi bi-trash"></i></button></td>
+  `;
+  const rules = _rulesState.rules || { subject_aliases: {}, variables: {}, metrics: [] };
+  _refreshMetricVarOptions(rules);
+  _ensureSelectOptions(tr.querySelector('select[data-role="m_ins_var"]'), _getVarOptions(rules));
+
+  const onChange = () => {
+    const rr = _rulesState.rules || rules;
+    _updateMetricRow(tr, rr);
+    _syncRulesJsonFromTables();
+  };
+  tr.querySelectorAll('input[data-role="m_name"],input[data-role="m_formula_raw"],select[data-role="m_format"]').forEach(el => {
+    el.addEventListener('change', onChange);
+    el.addEventListener('input', onChange);
+  });
+  tr.querySelector('button[data-role="m_ins_var_btn"]')?.addEventListener('click', () => {
+    const rr = _rulesState.rules || rules;
+    const sel = tr.querySelector('select[data-role="m_ins_var"]');
+    const v = (sel?.value || '').trim();
+    const input = tr.querySelector('input[data-role="m_formula_raw"]');
+    if (!v || !input) return;
+    _insertAtCursor(input, v);
+    _updateMetricRow(tr, rr);
+    _syncRulesJsonFromTables();
+  });
+  tr.querySelector('button[data-role="m_ins_div_btn"]')?.addEventListener('click', () => {
+    const rr = _rulesState.rules || rules;
+    const input = tr.querySelector('input[data-role="m_formula_raw"]');
+    if (!input) return;
+    _insertAtCursor(input, 'safe_div(, )');
+    _updateMetricRow(tr, rr);
+    _syncRulesJsonFromTables();
+  });
+  tr.querySelector('button[data-role="m_check_btn"]')?.addEventListener('click', () => {
+    const rr = _rulesState.rules || rules;
+    const formulaNow = (tr.querySelector('input[data-role="m_formula_raw"]')?.value || '').trim();
+    const errs = _validateFormulaSingle(formulaNow, rr);
+    if (errs.length) {
+      try { alert(errs.join('\n')); } catch {}
+    } else {
+      try { alert('公式校验通过'); } catch {}
+    }
+  });
+  tr.querySelector('button[data-role="del"]').addEventListener('click', () => {
+    tr.remove();
+    _syncRulesJsonFromTables();
+  });
+  body.appendChild(tr);
+  const rr = _rulesState.rules || rules;
+  _refreshMetricVarOptions(rr);
+  _updateMetricRow(tr, rr);
+}
+
+function _renderRulesTables(rules) {
+  const aliasesBody = document.getElementById('rulesAliasesBody');
+  const varsBody = document.getElementById('rulesVarsBody');
+  const metricsBody = document.getElementById('rulesMetricsBody');
+  if (aliasesBody) aliasesBody.innerHTML = '';
+  if (varsBody) varsBody.innerHTML = '';
+  if (metricsBody) metricsBody.innerHTML = '';
+
+  const sa = (rules && rules.subject_aliases) ? rules.subject_aliases : {};
+  if (sa && typeof sa === 'object') {
+    Object.keys(sa).sort().forEach(k => {
+      const syns = Array.isArray(sa[k]) ? sa[k].map(x => String(x || '').trim()).filter(Boolean).join(', ') : '';
+      _addAliasRow(k, syns);
+    });
+  }
+
+  const vars = (rules && rules.variables) ? rules.variables : {};
+  if (vars && typeof vars === 'object') {
+    Object.keys(vars).sort().forEach(name => {
+      const v = vars[name] || {};
+      const keywords = Array.isArray(v.keywords) ? v.keywords.map(x => String(x || '').trim()).filter(Boolean).join(', ') : '';
+      _addVarRow(name, keywords, v.sheet_type || '', v.time_attr || '', v.category || '');
+    });
+  }
+
+  const metrics = Array.isArray(rules?.metrics) ? rules.metrics : [];
+  metrics.forEach(m => _addMetricRow(m?.name || '', m?.formula || '', m?.format || ''));
+  _syncRulesJsonFromTables();
+  _showRulesSubPane('rules-pane-aliases');
+}
+
+async function loadRulesUI(force=false) {
+  if (_rulesLoadedOnce && !force) return;
+  try {
+    const resp = await fetch('/api/rules');
+    const data = await resp.json();
+    if (!data || !data.ok) {
+      setStatus((data && data.message) ? data.message : 'rules 加载失败');
+      return;
+    }
+    const pathEl = document.getElementById('rulesPathText');
+    if (pathEl) pathEl.innerText = data.path || '';
+    _renderRulesTables(data.rules || {});
+    _rulesLoadedOnce = true;
+    setStatus('rules 已加载');
+  } catch (e) {
+    setStatus('rules 加载失败');
+  }
+}
+
+document.getElementById('btnRulesReload')?.addEventListener('click', async () => {
+  _rulesLoadedOnce = false;
+  await loadRulesUI(true);
+});
+
+document.getElementById('btnRulesAddAlias')?.addEventListener('click', () => {
+  _addAliasRow('', '');
+  _syncRulesJsonFromTables();
+});
+
+document.getElementById('btnRulesAddVar')?.addEventListener('click', () => {
+  _addVarRow('', '', '', '', '');
+  _syncRulesJsonFromTables();
+});
+
+document.getElementById('btnRulesAddMetric')?.addEventListener('click', () => {
+  _addMetricRow('', '', 'number');
+  _syncRulesJsonFromTables();
+});
+
+document.getElementById('btnRulesFormatJson')?.addEventListener('click', () => {
+  const ta = document.getElementById('rulesJsonText');
+  if (!ta) return;
+  try {
+    const obj = JSON.parse(ta.value || '{}');
+    ta.value = JSON.stringify(obj, null, 2);
+    setStatus('JSON 已格式化');
+  } catch {
+    setStatus('JSON 解析失败');
+  }
+});
+
+document.getElementById('btnRulesApplyJson')?.addEventListener('click', () => {
+  const ta = document.getElementById('rulesJsonText');
+  if (!ta) return;
+  try {
+    const obj = JSON.parse(ta.value || '{}');
+    _renderRulesTables(obj || {});
+    setStatus('已从 JSON 应用到表格');
+  } catch {
+    setStatus('JSON 解析失败');
+  }
+});
+
+document.getElementById('btnRulesSave')?.addEventListener('click', async () => {
+  const ta = document.getElementById('rulesJsonText');
+  if (!ta) return;
+  let obj = null;
+  try {
+    obj = JSON.parse(ta.value || '{}');
+  } catch {
+    setStatus('JSON 解析失败，无法保存');
+    return;
+  }
+  const errs = _validateRulesObject(obj);
+  if (errs.length) {
+    setStatus('保存失败：规则校验未通过');
+    try { alert(errs.join('\n')); } catch {}
+    return;
+  }
+  try {
+    const resp = await fetch('/api/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
+    const data = await resp.json();
+    if (!data || !data.ok) {
+      setStatus((data && data.message) ? data.message : '保存失败');
+      return;
+    }
+    const pathEl = document.getElementById('rulesPathText');
+    if (pathEl && data.path) pathEl.innerText = data.path;
+    setStatus('rules 已保存');
+  } catch {
+    setStatus('保存失败');
+  }
+});
+
+async function loadSavedQueries() {
+  try {
+    const resp = await fetch('/api/config/queries');
+    savedQueries = await resp.json();
+    const sel = document.getElementById('savedQueriesSelect');
+    sel.innerHTML = '<option value="">选择已保存的查询...</option>';
+    for (const name of Object.keys(savedQueries)) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.innerText = name;
+      sel.appendChild(opt);
+    }
+  } catch (e) {
+    console.error('Failed to load saved queries', e);
+  }
+}
+
+document.getElementById('btnSaveCurrentQuery').addEventListener('click', async () => {
+  const name = (document.getElementById('newQueryName').value || '').trim();
+  if (!name) {
+    setStatus('请输入查询名称');
+    return;
+  }
+  const payload = getQueryPayload();
+  // Remove empty fields to keep it clean
+  for (const k in payload) {
+    if (payload[k] === null || payload[k] === undefined || payload[k] === '') {
+      delete payload[k];
+    }
+  }
+  
+  try {
+    await fetch(`/api/config/queries/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    setStatus(`查询 "${name}" 已保存`);
+    document.getElementById('newQueryName').value = '';
+    await loadSavedQueries();
+  } catch (e) {
+    setStatus('保存失败');
+  }
+});
+
+document.getElementById('btnLoadSavedQuery').addEventListener('click', () => {
+  const sel = document.getElementById('savedQueriesSelect');
+  const name = sel.value;
+  if (!name || !savedQueries[name]) return;
+  
+  const q = savedQueries[name];
+  document.getElementById('qSubject').value = q.subject || '';
+  document.getElementById('qSourceFile').value = q.source_file || '';
+  document.getElementById('qDate').value = q.date || '';
+  document.getElementById('qReportType').value = q.report_type || '';
+  document.getElementById('qTimeAttr').value = q.category || ''; // Note: qTimeAttr maps to category in backend? No, wait.
+  // Let's check getQueryPayload to be sure about mapping.
+  // getQueryPayload maps: subject, source_file, date, report_type, category, time_attr, min_amount, max_amount
+  // HTML IDs: qSubject, qSourceFile, qDate, qReportType, qTimeAttr...
+  
+  // Wait, I need to check getQueryPayload implementation to see the mapping.
+  // Assuming keys match payload structure.
+  
+  if (q.category !== undefined) document.getElementById('qTimeAttr').value = q.category; // Wait, qTimeAttr is usually category?
+  // Let's re-read getQueryPayload later. For now assume standard keys.
+  
+  // Actually, let's look at getQueryPayload below or just implement the mapping based on IDs.
+  // I will check getQueryPayload in the next turn if needed, but for now I will try to map common fields.
+  
+  if (q.min_amount !== undefined) document.getElementById('qMinAmount').value = q.min_amount;
+  if (q.max_amount !== undefined) document.getElementById('qMaxAmount').value = q.max_amount;
+  if (q.limit !== undefined) queryState.limit = q.limit;
+  if (q.topn !== undefined) document.getElementById('qTopN').value = q.topn;
+  if (q.sort_by !== undefined) document.getElementById('qSortBy').value = q.sort_by;
+  if (q.sort_dir !== undefined) document.getElementById('qSortDir').value = q.sort_dir;
+  
+  // Specific handling for select elements that might not have options populated yet?
+  // No, options should be populated if reloadQueryOptions was called.
+  // But if options are dynamic, we might set a value that doesn't exist. 
+  // Standard HTML select behavior: if value doesn't exist, it might just show blank or first option.
+  
+  // Let's do a best effort.
+  // qTimeAttr in HTML usually maps to time_attr in backend.
+  if (q.time_attr !== undefined) document.getElementById('qTimeAttr').value = q.time_attr;
+  
+  setStatus(`已加载查询 "${name}"`);
+});
+
+document.getElementById('btnDeleteSavedQuery').addEventListener('click', async () => {
+  const sel = document.getElementById('savedQueriesSelect');
+  const name = sel.value;
+  if (!name) return;
+  
+  if (!confirm(`确定要删除查询 "${name}" 吗？`)) return;
+  
+  try {
+    await fetch(`/api/config/queries/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    setStatus(`查询 "${name}" 已删除`);
+    await loadSavedQueries();
+  } catch (e) {
+    setStatus('删除失败');
+  }
+});
+
+async function loadValidationSummary() {
+  try {
+    const resp = await fetch('/api/validation/summary');
+    const res = await resp.json();
+    const tbody = document.getElementById('validationSummaryBody');
+    tbody.innerHTML = '';
+    
+    if (res.data && res.data.length > 0) {
+      for (const row of res.data) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${row['源文件'] || ''}</td>
+          <td>${row['日期'] || ''}</td>
+          <td>${row['验证项目'] || ''}</td>
+          <td>${row['总条数'] || 0}</td>
+          <td style="${row['不平衡条数'] > 0 ? 'color: var(--danger); font-weight: bold;' : ''}">${row['不平衡条数'] || 0}</td>
+          <td>${row['最大差额'] != null ? Number(row['最大差额']).toFixed(2) : '-'}</td>
+          <td>${row['平均差额'] != null ? Number(row['平均差额']).toFixed(2) : '-'}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    } else {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="padding: 2rem; color: var(--text-secondary);">暂无数据</td></tr>';
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+document.getElementById('btnQueryValidation').addEventListener('click', () => queryValidation());
+
+async function queryValidation() {
+  const minDiff = document.getElementById('vMinDiff').value.trim();
+  const sourceFile = document.getElementById('vSourceFile').value.trim();
+  const isBalanced = document.getElementById('vIsBalanced').value;
+  
+  const params = new URLSearchParams();
+  if (minDiff) params.append('min_diff', minDiff);
+  if (sourceFile) params.append('source_file', sourceFile);
+  if (isBalanced) params.append('is_balanced', isBalanced);
+  params.append('limit', '200');
+  
+  try {
+    const resp = await fetch('/api/validation/query?' + params.toString());
+    const res = await resp.json();
+    const tbody = document.getElementById('unbalancedBody');
+    tbody.innerHTML = '';
+    
+    if (res.data && res.data.length > 0) {
+       for (const row of res.data) {
+         const tr = document.createElement('tr');
+         tr.innerHTML = `
+           <td>${row['源文件'] || ''}</td>
+           <td>${row['来源Sheet'] || ''}</td>
+           <td>${row['日期'] || ''}</td>
+           <td>${row['时间属性'] || ''}</td>
+           <td style="color: var(--danger); font-family: monospace;">${row['差额'] != null ? Number(row['差额']).toFixed(2) : '-'}</td>
+           <td>${row['验证结果'] || ''}</td>
+         `;
+         tbody.appendChild(tr);
+       }
+    } else {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding: 2rem; color: var(--text-secondary);">未找到记录</td></tr>';
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
 
 function setStatus(text) {
   document.getElementById('statusText').innerText = text || '';
@@ -660,13 +1795,20 @@ function formatAccountingNumber(n) {
   return nf.format(n);
 }
 
-function setCellTextWithFormat(td, raw) {
+function setCellTextWithFormat(td, raw, colName) {
   if (raw == null) { td.innerText = ''; return; }
+  
+  const isCount = colName && (String(colName).includes('条数') || String(colName) === 'rows' || String(colName) === 'count');
+
   const parsed = tryParseNumeric(raw);
   if (parsed && parsed.kind === 'number' && Number.isFinite(parsed.n)) {
     td.classList.add('num');
     if (parsed.n < 0) td.classList.add('neg');
-    td.innerText = formatAccountingNumber(parsed.n);
+    if (isCount) {
+      td.innerText = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(parsed.n);
+    } else {
+      td.innerText = formatAccountingNumber(parsed.n);
+    }
     return;
   }
   if (parsed && parsed.kind === 'percent' && Number.isFinite(parsed.n)) {
@@ -689,7 +1831,7 @@ function renderUnbalanced(rows) {
     const cols = ['源文件', '来源Sheet', '日期', '时间属性', '差额', '验证结果'];
     for (const c of cols) {
       const td = document.createElement('td');
-      setCellTextWithFormat(td, (r && r[c] != null) ? r[c] : '');
+      setCellTextWithFormat(td, (r && r[c] != null) ? r[c] : '', c);
       if (c === '差额' || c === '验证结果') td.style.color = 'var(--danger)';
       tr.appendChild(td);
     }
@@ -731,7 +1873,7 @@ function renderTable(headEl, bodyEl, rows, preferredCols, rowClassFn) {
     if (cls) tr.className = cls;
     for (const c of cols) {
       const td = document.createElement('td');
-      setCellTextWithFormat(td, (r && r[c] != null) ? r[c] : '');
+      setCellTextWithFormat(td, (r && r[c] != null) ? r[c] : '', c);
       tr.appendChild(td);
     }
     bodyEl.appendChild(tr);
@@ -796,8 +1938,12 @@ function getQueryPayload() {
     time_attr: document.getElementById('qTimeAttr').value,
     min_amount: numOrNull(document.getElementById('qMinAmount').value),
     max_amount: numOrNull(document.getElementById('qMaxAmount').value),
+    sort_by: document.getElementById('qSortBy').value,
+    sort_dir: document.getElementById('qSortDir').value,
+    topn: numOrNull(document.getElementById('qTopN').value),
     limit: queryState.limit,
     offset: queryState.offset,
+    group_by: document.getElementById('qGroupBy').value,
   };
 }
 
@@ -818,11 +1964,26 @@ async function runQuery(resetOffset) {
     queryState.offset = data.offset || 0;
     const meta = `命中 ${queryState.total} 行 | 当前 ${queryState.offset + 1}-${Math.min(queryState.offset + queryState.limit, queryState.total)}`;
     document.getElementById('qMeta').innerText = `数据源：${(data.path || '').split(/[\\\\/]/).pop()} | ${meta}`;
-    const preferred = ['源文件', '日期', '报表类型', '大类', '科目', '时间属性', '金额', '来源Sheet'];
+    const preferred = ['源文件', '日期', '报表类型', '大类', '科目', '时间属性', '金额', '条数', '来源Sheet'];
     renderTable(document.getElementById('cleanedHead'), document.getElementById('cleanedBody'), data.rows || [], preferred, null);
   } catch {
     setStatus('查询失败（请先运行生成清洗表）');
   }
+}
+
+function exportCSV() {
+  const p = getQueryPayload();
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(p)) {
+    if (v == null) continue;
+    if (typeof v === 'string' && v.trim() === '') continue;
+    qs.set(k, String(v));
+  }
+  const fmt = document.getElementById('qExportFormat').value;
+  if (fmt) qs.set('format', fmt);
+  
+  const url = '/api/cleaned/export?' + qs.toString();
+  window.open(url, '_blank');
 }
 
 function applyResult(res) {
@@ -913,6 +2074,7 @@ bind('btnApplyPreset', async () => {
 
 bind('btnReloadQueryOptions', () => loadQueryOptions(true));
 bind('btnQuery', () => runQuery(true));
+bind('btnExportCSV', () => exportCSV());
 bind('btnQueryPrev', () => { queryState.offset = Math.max(0, queryState.offset - queryState.limit); runQuery(false); });
 bind('btnQueryNext', () => { queryState.offset = queryState.offset + queryState.limit; runQuery(false); });
 
