@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import queue
 import threading
 import logging
@@ -7,6 +8,7 @@ import socket
 from dataclasses import asdict
 from typing import Optional, Any, Dict, List
 from pathlib import Path
+import sqlite3
 
 import pandas as pd
 
@@ -23,9 +25,11 @@ from financial_analyzer_core import (
     OUTPUT_PATH,
     AppConfig,
     AnalysisResult,
+    get_base_dir,
     load_config,
     save_config,
     analyze_directory,
+    _cleaned_sqlite_path_for,
     _get_logger,
     _list_excel_files,
 )
@@ -95,8 +99,11 @@ class _WebRunner:
             cfg.input_dir = os.getcwd()
         if not getattr(cfg, "file_glob", None):
             cfg.file_glob = "*.xlsx"
-        if not getattr(cfg, "output_dir", None):
-            cfg.output_dir = os.getcwd()
+        out_dir = str(getattr(cfg, "output_dir", "") or "").strip()
+        if not out_dir:
+            cfg.output_dir = "output"
+        else:
+            cfg.output_dir = out_dir
         if not getattr(cfg, "output_basename", None):
             cfg.output_basename = OUTPUT_PATH
         try:
@@ -171,7 +178,72 @@ class _WebRunner:
             cfg = self.cfg
         if res and getattr(res, "cleaned_path", None):
             return str(res.cleaned_path or "")
-        return os.path.abspath(os.path.join(cfg.output_dir, cfg.output_basename))
+
+        base_dir = os.path.abspath(get_base_dir())
+        out_dir = str(cfg.output_dir or "").strip() or "output"
+        output_root = os.path.abspath(out_dir) if os.path.isabs(out_dir) else os.path.abspath(os.path.join(base_dir, out_dir))
+        if output_root == base_dir:
+            output_root = os.path.abspath(os.path.join(output_root, "output"))
+
+        direct = os.path.abspath(os.path.join(output_root, cfg.output_basename))
+        if os.path.exists(direct):
+            return direct
+
+        try:
+            entries = [n for n in os.listdir(output_root) if os.path.isdir(os.path.join(output_root, n))]
+        except Exception:
+            entries = []
+        stamp_dirs = [n for n in entries if re.match(r"^\\d{8}_\\d{6}$", str(n or "").strip())]
+        stamp_dirs.sort(reverse=True)
+        for d in stamp_dirs:
+            p = os.path.abspath(os.path.join(output_root, d, cfg.output_basename))
+            if os.path.exists(p):
+                return p
+
+        return direct
+
+    def _get_cleaned_sqlite_path(self) -> str:
+        with self._lock:
+            res = self.last_result
+            cfg = self.cfg
+        if res and getattr(res, "cleaned_sqlite_path", None):
+            return str(getattr(res, "cleaned_sqlite_path") or "")
+
+        xlsx_path = self._get_cleaned_path()
+        guess = _cleaned_sqlite_path_for(xlsx_path) if xlsx_path else ""
+        if guess and os.path.exists(guess):
+            return guess
+
+        base_dir = os.path.abspath(get_base_dir())
+        data_root = os.path.abspath(os.path.join(base_dir, "data"))
+        stem = os.path.splitext(str(cfg.output_basename or OUTPUT_PATH))[0] or "cleaned"
+        candidates: List[str] = []
+        try:
+            for name in os.listdir(data_root):
+                if not str(name).lower().endswith(".sqlite"):
+                    continue
+                if name == f"{stem}.sqlite" or name.startswith(f"{stem}_"):
+                    candidates.append(os.path.join(data_root, name))
+        except Exception:
+            candidates = []
+
+        if candidates:
+            candidates.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0.0, reverse=True)
+            return os.path.abspath(candidates[0])
+
+        return guess or ""
+
+    def _sqlite_is_available(self) -> bool:
+        sp = self._get_cleaned_sqlite_path()
+        if not sp or not os.path.exists(sp):
+            return False
+        xp = self._get_cleaned_path()
+        if not xp or not os.path.exists(xp):
+            return True
+        try:
+            return float(os.path.getmtime(sp)) >= float(os.path.getmtime(xp))
+        except Exception:
+            return True
 
     def load_cleaned_df(self, force_reload: bool = False) -> pd.DataFrame:
         path = self._get_cleaned_path()
@@ -335,6 +407,37 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.get("/api/cleaned/options")
     def api_cleaned_options(force: int = 0) -> Dict[str, Any]:
+        if runner._sqlite_is_available() and not bool(int(force or 0)):
+            sp = runner._get_cleaned_sqlite_path()
+            try:
+                conn = sqlite3.connect(sp, check_same_thread=False)
+                try:
+                    opts: Dict[str, Any] = {"ok": True}
+                    for col in ["源文件", "日期", "报表类型", "大类", "时间属性"]:
+                        try:
+                            cur = conn.execute(
+                                f'SELECT DISTINCT "{col}" FROM cleaned WHERE "{col}" IS NOT NULL AND TRIM(CAST("{col}" AS TEXT)) <> \'\' ORDER BY "{col}" LIMIT 500'
+                            )
+                            vals = [str(r[0]) for r in cur.fetchall() if r and r[0] is not None and str(r[0]).strip() != ""]
+                            opts[col] = vals
+                        except Exception:
+                            pass
+                    try:
+                        cur = conn.execute("SELECT COUNT(*) FROM cleaned")
+                        row = cur.fetchone()
+                        opts["rows"] = int(row[0]) if row else 0
+                    except Exception:
+                        opts["rows"] = 0
+                    opts["path"] = runner._get_cleaned_path()
+                    opts["sqlite"] = sp
+                    return _sanitize_json(opts)
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         try:
             df = runner.load_cleaned_df(force_reload=bool(int(force or 0)))
         except Exception as e:
@@ -368,6 +471,88 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         limit: int = 200,
         offset: int = 0,
     ) -> Dict[str, Any]:
+        if runner._sqlite_is_available():
+            sp = runner._get_cleaned_sqlite_path()
+            try:
+                conn = sqlite3.connect(sp, check_same_thread=False)
+                try:
+                    where: List[str] = []
+                    params: List[Any] = []
+
+                    def add_eq(col: str, val: str) -> None:
+                        if val is None:
+                            return
+                        v = str(val).strip()
+                        if not v:
+                            return
+                        where.append(f'"{col}" = ?')
+                        params.append(v)
+
+                    add_eq("源文件", source_file)
+                    add_eq("日期", date)
+                    add_eq("报表类型", report_type)
+                    add_eq("大类", category)
+                    add_eq("时间属性", time_attr)
+
+                    kw = (subject or q or "").strip()
+                    if kw:
+                        where.append('LOWER(CAST("科目" AS TEXT)) LIKE ?')
+                        params.append(f"%{kw.lower()}%")
+
+                    if min_amount is not None:
+                        try:
+                            where.append('"金额" >= ?')
+                            params.append(float(min_amount))
+                        except Exception:
+                            pass
+                    if max_amount is not None:
+                        try:
+                            where.append('"金额" <= ?')
+                            params.append(float(max_amount))
+                        except Exception:
+                            pass
+
+                    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+                    total = 0
+                    try:
+                        cur = conn.execute("SELECT COUNT(*) FROM cleaned" + where_sql, params)
+                        row = cur.fetchone()
+                        total = int(row[0]) if row else 0
+                    except Exception:
+                        total = 0
+
+                    lim = int(max(1, min(int(limit or 200), 2000)))
+                    off = int(max(0, int(offset or 0)))
+                    rows: List[Dict[str, Any]] = []
+                    try:
+                        cur = conn.execute(
+                            "SELECT * FROM cleaned" + where_sql + " LIMIT ? OFFSET ?",
+                            params + [lim, off],
+                        )
+                        cols = [d[0] for d in (cur.description or [])]
+                        fetched = cur.fetchall()
+                        rows = [dict(zip(cols, r)) for r in fetched]
+                    except Exception:
+                        rows = []
+
+                    return _sanitize_json(
+                        {
+                            "ok": True,
+                            "path": runner._get_cleaned_path(),
+                            "sqlite": sp,
+                            "total": int(total),
+                            "limit": lim,
+                            "offset": off,
+                            "rows": rows,
+                        }
+                    )
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            except Exception as e:
+                return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(), "total": 0, "limit": 0, "offset": 0, "rows": []}
         try:
             df = runner.load_cleaned_df(force_reload=False)
         except Exception as e:

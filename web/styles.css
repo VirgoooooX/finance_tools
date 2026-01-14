@@ -44,6 +44,21 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+html, body, .table-container, .log-container, .nav-tabs-custom, #filesPreview {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+.table-container::-webkit-scrollbar,
+.log-container::-webkit-scrollbar,
+.nav-tabs-custom::-webkit-scrollbar,
+#filesPreview::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* Layout & Containers */
 .app-container {
   max-width: 1400px;

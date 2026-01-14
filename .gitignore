@@ -48,6 +48,10 @@ coverage.xml
 .hypothesis/
 
 # Data and Outputs
+/output/
+/data/
+*.sqlite
+*.db
 清洗后的AI标准财务表*.xlsx
 *.log
 

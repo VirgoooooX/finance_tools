@@ -1,12 +1,14 @@
 import pandas as pd
 import datetime
 import re
+import hashlib
 import glob
 import os
 import json
 import logging
 import threading
 import argparse
+import sqlite3
 from dataclasses import dataclass, asdict, field
 from typing import Callable, Optional, Any, Dict, List, Tuple
 
@@ -23,14 +25,14 @@ def get_base_dir():
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-DEFAULT_CONFIG_PATH = os.path.join(get_base_dir(), "financial_analyzer_config.json")
+DEFAULT_CONFIG_PATH = os.path.join(get_base_dir(), "config", "financial_analyzer_config.json")
 
 
 @dataclass
 class AppConfig:
     input_dir: str = field(default_factory=lambda: os.getcwd())
     file_glob: str = "*.xlsx"
-    output_dir: str = field(default_factory=lambda: os.getcwd())
+    output_dir: str = field(default_factory=lambda: "output")
     output_basename: str = OUTPUT_PATH
     generate_validation: bool = True
     generate_metrics: bool = True
@@ -58,6 +60,7 @@ class AnalysisResult:
     validation_groups: int = 0
     unbalanced_count: int = 0
     cleaned_path: Optional[str] = None
+    cleaned_sqlite_path: Optional[str] = None
     validation_path: Optional[str] = None
     metrics_path: Optional[str] = None
     unbalanced_preview: List[Dict[str, Any]] = field(default_factory=list)
@@ -69,6 +72,31 @@ def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+def _default_output_root() -> str:
+    return os.path.join(get_base_dir(), "output")
+
+
+def _default_data_root() -> str:
+    return os.path.join(get_base_dir(), "data")
+
+
+def _resolve_under_base(path: str) -> str:
+    p = str(path or "").strip()
+    if not p:
+        return ""
+    if os.path.isabs(p):
+        return os.path.abspath(p)
+    return os.path.abspath(os.path.join(get_base_dir(), p))
+
+
+def _is_timestamp_folder(name: str) -> bool:
+    return bool(re.match(r"^\d{8}_\d{6}$", str(name or "").strip()))
+
+
+def _run_timestamp() -> str:
+    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
 def _safe_int_pair(pair: Any) -> Optional[Tuple[int, int]]:
     if not isinstance(pair, (list, tuple)) or len(pair) != 2:
         return None
@@ -78,8 +106,89 @@ def _safe_int_pair(pair: Any) -> Optional[Tuple[int, int]]:
         return None
 
 
+def _cleaned_sqlite_path_for(cleaned_path: str) -> str:
+    name = os.path.basename(str(cleaned_path or "")).strip()
+    if not name:
+        base_name = "cleaned"
+    else:
+        base_name, _ = os.path.splitext(name)
+        base_name = base_name or "cleaned"
+
+    ts = ""
+    try:
+        parent = os.path.basename(os.path.dirname(str(cleaned_path or "")))
+        if _is_timestamp_folder(parent):
+            ts = parent
+    except Exception:
+        ts = ""
+
+    filename = f"{base_name}_{ts}.sqlite" if ts else f"{base_name}.sqlite"
+    return os.path.abspath(os.path.join(_default_data_root(), filename))
+
+
+def _write_cleaned_sqlite(
+    df: pd.DataFrame,
+    sqlite_path: str,
+    df_validation: Optional[pd.DataFrame] = None,
+    df_metrics: Optional[pd.DataFrame] = None,
+) -> None:
+    def _make_index_name(prefix: str, col: str) -> str:
+        safe = re.sub(r"[^0-9a-zA-Z_]+", "_", str(col)).strip("_")
+        digest = hashlib.sha1(str(col).encode("utf-8")).hexdigest()[:12]
+        if safe:
+            return f"{prefix}_{safe}_{digest}"
+        return f"{prefix}_{digest}"
+
+    _ensure_dir(os.path.dirname(sqlite_path) or os.getcwd())
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        df2 = df.copy()
+        if "金额" in df2.columns:
+            df2["金额"] = pd.to_numeric(df2["金额"], errors="coerce").fillna(0.0)
+        df2.to_sql("cleaned", conn, if_exists="replace", index=False, chunksize=2000)
+        for col in ["源文件", "日期", "报表类型", "大类", "时间属性", "科目", "金额"]:
+            if col in df2.columns:
+                idx_name = _make_index_name("idx_cleaned", col)
+                conn.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON cleaned("{col}")')
+
+        if df_validation is not None and isinstance(df_validation, pd.DataFrame) and not df_validation.empty:
+            vdf = df_validation.copy()
+            if "差额" in vdf.columns:
+                vdf["差额"] = pd.to_numeric(vdf["差额"], errors="coerce")
+            vdf.to_sql("validation", conn, if_exists="replace", index=False, chunksize=2000)
+            for col in ["源文件", "日期", "是否平衡", "验证项目", "时间属性", "差额", "来源Sheet"]:
+                if col in vdf.columns:
+                    idx_name = _make_index_name("idx_validation", col)
+                    conn.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON validation("{col}")')
+
+        if df_metrics is not None and isinstance(df_metrics, pd.DataFrame) and not df_metrics.empty:
+            mdf = df_metrics.copy()
+            mdf.to_sql("metrics", conn, if_exists="replace", index=False, chunksize=2000)
+            for col in ["源文件", "日期"]:
+                if col in mdf.columns:
+                    idx_name = _make_index_name("idx_metrics", col)
+                    conn.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON metrics("{col}")')
+        conn.commit()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def load_config(path: str) -> AppConfig:
     try:
+        if not os.path.exists(path):
+            legacy = os.path.join(get_base_dir(), "financial_analyzer_config.json")
+            if os.path.exists(legacy):
+                try:
+                    _ensure_dir(os.path.dirname(path) or os.getcwd())
+                    with open(legacy, "r", encoding="utf-8") as rf:
+                        raw = rf.read()
+                    with open(path, "w", encoding="utf-8") as wf:
+                        wf.write(raw)
+                except Exception:
+                    pass
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         cfg = AppConfig()
@@ -95,8 +204,21 @@ def load_config(path: str) -> AppConfig:
 
 def save_config(path: str, cfg: AppConfig) -> None:
     _ensure_dir(os.path.dirname(path) or os.getcwd())
+    data = asdict(cfg)
+    try:
+        base = os.path.abspath(get_base_dir())
+        out_dir = str(data.get("output_dir", "") or "").strip()
+        if out_dir and os.path.isabs(out_dir):
+            try:
+                rel = os.path.relpath(out_dir, base)
+                if not rel.startswith(".."):
+                    data["output_dir"] = rel.replace("\\", "/")
+            except Exception:
+                pass
+    except Exception:
+        pass
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(asdict(cfg), f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def _get_logger(name: str = "financial_analyzer", handler: Optional[logging.Handler] = None) -> logging.Logger:
@@ -247,11 +369,27 @@ def _read_date_from_cells(df: pd.DataFrame, cells: List[List[int]]) -> Any:
 
 
 def _find_header_row(df: pd.DataFrame, keyword: str) -> Optional[int]:
+    def norm(s: Any) -> str:
+        t = str(s or "")
+        t = t.strip().lower()
+        t = t.replace("（", "(").replace("）", ")").replace("\u3000", " ")
+        t = re.sub(r"\s+", "", t)
+        return t
+
     try:
-        matches = df[df.apply(lambda x: x.astype(str).str.contains(keyword).any(), axis=1)].index
-        if len(matches) == 0:
+        kw = norm(keyword)
+        if not kw:
             return None
-        return int(matches[0])
+
+        max_rows = min(int(df.shape[0]), 120)
+        sub = df.iloc[:max_rows]
+        values = sub.to_numpy()
+        for i in range(values.shape[0]):
+            row = values[i]
+            for j in range(row.shape[0]):
+                if kw in norm(row[j]):
+                    return int(sub.index[i])
+        return None
     except Exception:
         return None
 
@@ -280,11 +418,23 @@ def clean_date_str(date_val):
     return text.split(" ")[0]
 
 
-def clean_bs(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Logger] = None):
+def clean_bs(
+    file_path,
+    sheet_name,
+    cfg: AppConfig,
+    logger: Optional[logging.Logger] = None,
+    excel_file: Optional[pd.ExcelFile] = None,
+    sheet_df: Optional[pd.DataFrame] = None,
+):
     if logger:
         logger.info(f"正在处理: {sheet_name} ...")
     try:
-        df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+        if sheet_df is not None:
+            df = sheet_df
+        elif excel_file is not None:
+            df = excel_file.parse(sheet_name=sheet_name, header=None)
+        else:
+            df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
         date_val = _read_date_from_cells(df, cfg.date_cells_bs)
         report_date = clean_date_str(date_val)
         header_row = _find_header_row(df, cfg.header_keyword_bs)
@@ -315,11 +465,23 @@ def clean_bs(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         return pd.DataFrame()
 
 
-def clean_pl(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Logger] = None):
+def clean_pl(
+    file_path,
+    sheet_name,
+    cfg: AppConfig,
+    logger: Optional[logging.Logger] = None,
+    excel_file: Optional[pd.ExcelFile] = None,
+    sheet_df: Optional[pd.DataFrame] = None,
+):
     if logger:
         logger.info(f"正在处理: {sheet_name} ...")
     try:
-        df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+        if sheet_df is not None:
+            df = sheet_df
+        elif excel_file is not None:
+            df = excel_file.parse(sheet_name=sheet_name, header=None)
+        else:
+            df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
         date_val = _read_date_from_cells(df, cfg.date_cells_pl)
         report_date = clean_date_str(date_val)
         header_row = _find_header_row(df, cfg.header_keyword_pl)
@@ -342,11 +504,23 @@ def clean_pl(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         return pd.DataFrame()
 
 
-def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Logger] = None):
+def clean_cf(
+    file_path,
+    sheet_name,
+    cfg: AppConfig,
+    logger: Optional[logging.Logger] = None,
+    excel_file: Optional[pd.ExcelFile] = None,
+    sheet_df: Optional[pd.DataFrame] = None,
+):
     if logger:
         logger.info(f"正在处理: {sheet_name} ...")
     try:
-        df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+        if sheet_df is not None:
+            df = sheet_df
+        elif excel_file is not None:
+            df = excel_file.parse(sheet_name=sheet_name, header=None)
+        else:
+            df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
         date_val = _read_date_from_cells(df, cfg.date_cells_cf)
         report_date = clean_date_str(date_val)
         header_row = _find_header_row(df, cfg.header_keyword_cf)
@@ -726,7 +900,19 @@ def analyze_directory(
     if logger is None:
         logger = _get_logger()
 
-    _ensure_dir(cfg.output_dir)
+    base_dir = os.path.abspath(get_base_dir())
+    output_root_raw = str(cfg.output_dir or "").strip() or _default_output_root()
+    output_root = _resolve_under_base(output_root_raw)
+    if output_root == base_dir:
+        output_root = os.path.abspath(os.path.join(output_root, "output"))
+
+    stamp = _run_timestamp()
+    run_dir = output_root
+    if not _is_timestamp_folder(os.path.basename(run_dir)):
+        run_dir = os.path.join(output_root, stamp)
+
+    _ensure_dir(run_dir)
+    _ensure_dir(_default_data_root())
     files = _list_excel_files(cfg)
     result.found_files = files
 
@@ -751,50 +937,58 @@ def analyze_directory(
         logger.info(f"正在处理文件: {os.path.basename(file_path)}")
         try:
             excel_file = pd.ExcelFile(file_path)
-            all_sheets = excel_file.sheet_names
-            bs_sheets = [s for s in all_sheets if cfg.sheet_keyword_bs.upper() in s.upper()]
-            pl_sheets = [s for s in all_sheets if cfg.sheet_keyword_pl.upper() in s.upper()]
-            cf_sheets = [s for s in all_sheets if cfg.sheet_keyword_cf.upper() in s.upper()]
+            try:
+                all_sheets = excel_file.sheet_names
+                bs_sheets = [s for s in all_sheets if cfg.sheet_keyword_bs.upper() in s.upper()]
+                pl_sheets = [s for s in all_sheets if cfg.sheet_keyword_pl.upper() in s.upper()]
+                cf_sheets = [s for s in all_sheets if cfg.sheet_keyword_cf.upper() in s.upper()]
 
-            logger.info(f"发现 {len(all_sheets)} 个Sheet")
-            logger.info(f"BS: {bs_sheets if bs_sheets else '无'} | PL: {pl_sheets if pl_sheets else '无'} | CF: {cf_sheets if cf_sheets else '无'}")
+                logger.info(f"发现 {len(all_sheets)} 个Sheet")
+                logger.info(f"BS: {bs_sheets if bs_sheets else '无'} | PL: {pl_sheets if pl_sheets else '无'} | CF: {cf_sheets if cf_sheets else '无'}")
 
-            file_sheets_data = []
-            for sheet in bs_sheets:
-                if cancel_event and cancel_event.is_set():
-                    result.cancelled = True
-                    logger.warning("已取消运行")
-                    return result
-                df = clean_bs(file_path, sheet, cfg, logger)
-                if not df.empty:
-                    file_sheets_data.append(df)
+                file_sheets_data = []
+                for sheet in bs_sheets:
+                    if cancel_event and cancel_event.is_set():
+                        result.cancelled = True
+                        logger.warning("已取消运行")
+                        return result
+                    df = clean_bs(file_path, sheet, cfg, logger, excel_file=excel_file)
+                    if not df.empty:
+                        file_sheets_data.append(df)
 
-            for sheet in pl_sheets:
-                if cancel_event and cancel_event.is_set():
-                    result.cancelled = True
-                    logger.warning("已取消运行")
-                    return result
-                df = clean_pl(file_path, sheet, cfg, logger)
-                if not df.empty:
-                    file_sheets_data.append(df)
+                for sheet in pl_sheets:
+                    if cancel_event and cancel_event.is_set():
+                        result.cancelled = True
+                        logger.warning("已取消运行")
+                        return result
+                    df = clean_pl(file_path, sheet, cfg, logger, excel_file=excel_file)
+                    if not df.empty:
+                        file_sheets_data.append(df)
 
-            for sheet in cf_sheets:
-                if cancel_event and cancel_event.is_set():
-                    result.cancelled = True
-                    logger.warning("已取消运行")
-                    return result
-                df = clean_cf(file_path, sheet, cfg, logger)
-                if not df.empty:
-                    file_sheets_data.append(df)
+                for sheet in cf_sheets:
+                    if cancel_event and cancel_event.is_set():
+                        result.cancelled = True
+                        logger.warning("已取消运行")
+                        return result
+                    df = clean_cf(file_path, sheet, cfg, logger, excel_file=excel_file)
+                    if not df.empty:
+                        file_sheets_data.append(df)
 
-            if file_sheets_data:
-                file_data = pd.concat(file_sheets_data, ignore_index=True)
-                file_data["源文件"] = os.path.basename(file_path)
-                all_files_data.append(file_data)
-                result.processed_files += 1
-                logger.info(f"完成: 提取 {len(file_data)} 行")
-            else:
-                logger.warning("未提取到任何数据，可能缺少包含BS/PL/CF的Sheet")
+                if file_sheets_data:
+                    file_data = pd.concat(file_sheets_data, ignore_index=True)
+                    file_data["源文件"] = os.path.basename(file_path)
+                    all_files_data.append(file_data)
+                    result.processed_files += 1
+                    logger.info(f"完成: 提取 {len(file_data)} 行")
+                else:
+                    logger.warning("未提取到任何数据，可能缺少包含BS/PL/CF的Sheet")
+            finally:
+                try:
+                    close = getattr(excel_file, "close", None)
+                    if callable(close):
+                        close()
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"读取失败: {e}")
             result.errors.append(f"{os.path.basename(file_path)}: {e}")
@@ -819,11 +1013,13 @@ def analyze_directory(
     final_cols = [c for c in cols if c in all_data.columns]
     all_data = all_data[final_cols]
 
-    cleaned_path = os.path.abspath(os.path.join(cfg.output_dir, cfg.output_basename))
+    cleaned_path = os.path.abspath(os.path.join(run_dir, cfg.output_basename))
     all_data.to_excel(cleaned_path, index=False)
     result.cleaned_path = cleaned_path
     result.cleaned_rows = int(len(all_data))
     logger.info(f"原始数据已保存: {cleaned_path}")
+    cleaned_sqlite_path = _cleaned_sqlite_path_for(cleaned_path)
+    result.cleaned_sqlite_path = cleaned_sqlite_path
 
     validation_group_cols = ["源文件", "日期"]
     metrics_group_cols = ["源文件", "日期"]
@@ -832,6 +1028,8 @@ def analyze_directory(
 
     validation_results = []
     metrics_results = []
+    df_validation: Optional[pd.DataFrame] = None
+    df_metrics: Optional[pd.DataFrame] = None
     if existing_validation_group_cols:
         grouped_validation = all_data.groupby(existing_validation_group_cols, dropna=False)
         for group_keys, df_group in grouped_validation:
@@ -908,6 +1106,12 @@ def analyze_directory(
         result.metrics_preview = _df_preview_records(df_metrics, limit=2000)
         logger.info(f"财务指标已保存: {metrics_path}")
 
+    try:
+        _write_cleaned_sqlite(all_data, cleaned_sqlite_path, df_validation=df_validation, df_metrics=df_metrics)
+        logger.info(f"SQLite已保存: {cleaned_sqlite_path}")
+    except Exception as e:
+        logger.warning(f"SQLite保存失败: {e}")
+
     return result
 
 
@@ -923,7 +1127,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.input_dir:
         cfg.input_dir = args.input_dir
     if args.output_dir:
-        cfg.output_dir = args.output_dir
+        cfg.output_dir = _resolve_under_base(args.output_dir)
     if args.glob:
         cfg.file_glob = args.glob
 
