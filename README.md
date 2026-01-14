@@ -1,4 +1,4 @@
-# 财务数据分析工具（Web/桌面/命令行）
+# 财务数据分析工具（Web/命令行）
 
 本项目用于批量清洗财务报表、生成验证报告与财务指标，并提供本机 Web 界面。
 
@@ -12,11 +12,6 @@ py -m pip install -U pip
 py -m pip install pandas openpyxl fastapi uvicorn
 ```
 
-可选（桌面 UI 才需要）：
-```powershell
-py -m pip install customtkinter
-```
-
 ## 启动 Web 界面
 ```powershell
 py financial_analyzer.py --web --port 8765
@@ -25,11 +20,6 @@ py financial_analyzer.py --web --port 8765
 说明：
 - 直接运行 `py financial_analyzer.py`（不带参数）会默认启动 Web。
 - 如不想自动打开浏览器：`py financial_analyzer.py --web --no-browser`，再手动访问 `http://127.0.0.1:8765/`。
-
-## 启动桌面 UI（可选）
-```powershell
-py financial_analyzer.py --ui
-```
 
 ## 命令行模式（可选）
 ```powershell

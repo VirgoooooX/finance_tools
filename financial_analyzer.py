@@ -4,7 +4,6 @@ from typing import Optional, List
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="财务数据清洗、验证与指标计算")
-    parser.add_argument("--ui", action="store_true", help="启动图形界面")
     parser.add_argument("--web", action="store_true", help="启动本机Web界面")
     parser.add_argument("--config", type=str, default=None, help="配置文件路径(JSON)")
     parser.add_argument("--input-dir", type=str, default=None, help="输入目录")
@@ -15,7 +14,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-browser", action="store_true", help="启动Web时不自动打开浏览器")
     args = parser.parse_args(argv)
 
-    # 如果没有提供任何模式参数（--ui 或 --web 或 --config 等 CLI 参数），默认启动 web
+    # 如果没有提供任何模式参数（--web 或 --config 等 CLI 参数），默认启动 web
     import sys
     is_interactive = len(sys.argv) == 1
     
@@ -29,14 +28,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             port=int(args.port),
             open_browser=not bool(args.no_browser),
         )
-
-    if args.ui:
-        from financial_analyzer_core import DEFAULT_CONFIG_PATH
-        from financial_analyzer_desktop import FinancialAnalyzerUI
-
-        app = FinancialAnalyzerUI(config_path=args.config or DEFAULT_CONFIG_PATH)
-        app.run()
-        return 0
 
     from financial_analyzer_core import DEFAULT_CONFIG_PATH, main as cli_main
 
