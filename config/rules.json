@@ -1,320 +1,320 @@
 {
   "subject_aliases": {
-    "èµäº§æ»è®¡": [
-      "èµäº§æ»é¢",
-      "èµäº§åè®¡"
+    "资产总计": [
+      "资产总额",
+      "资产合计"
     ],
-    "è´åºåè®¡": [
-      "è´åºæ»è®¡",
-      "è´åºæ»é¢"
+    "负债合计": [
+      "负债总计",
+      "负债总额"
     ],
-    "ææèæçåè®¡": [
-      "è¡ä¸æçåè®¡",
-      "æçåè®¡",
-      "ææèæçï¼æè¡ä¸æçï¼åè®¡"
+    "所有者权益合计": [
+      "股东权益合计",
+      "权益合计",
+      "所有者权益（或股东权益）合计"
     ],
-    "åºæ¶è´¦æ¬¾": [
-      "åºæ¶å¸æ¬¾"
+    "应收账款": [
+      "应收帐款"
     ],
-    "è¥ä¸æ¶å¥": [
-      "ä¸»è¥ä¸å¡æ¶å¥"
+    "营业收入": [
+      "主营业务收入"
     ],
-    "è¥ä¸ææ¬": [
-      "ä¸»è¥ä¸å¡ææ¬"
+    "营业成本": [
+      "主营业务成本"
     ],
-    "ææ«ç°éåç°éç­ä»·ç©ä½é¢": [
-      "ææ«ç°éåç°éç­ä»·ç©ä½é¢(éæ³¨)",
-      "ææ«ç°éåç°éç­ä»·ç©ä½é¢ï¼éæ³¨ï¼"
+    "期末现金及现金等价物余额": [
+      "期末现金及现金等价物余额(附注)",
+      "期末现金及现金等价物余额（附注）"
     ],
-    "äº§æå(åºå­åå)": [
-      "äº§æå",
-      "åºå­åå"
+    "产成品(库存商品)": [
+      "产成品",
+      "库存商品"
     ]
   },
   "variables": {
     "assets_total_end": {
       "keywords": [
-        "èµäº§æ»è®¡",
-        "èµäº§æ»é¢",
-        "èµäº§åè®¡"
+        "资产总计",
+        "资产总额",
+        "资产合计"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额"
     },
     "current_assets_end": {
       "keywords": [
-        "æµå¨èµäº§åè®¡",
-        "æµå¨èµäº§æ»è®¡"
+        "流动资产合计",
+        "流动资产总计"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额"
     },
     "cash_end": {
       "keywords": [
-        "è´§å¸èµé",
-        "ç°éåç°éç­ä»·ç©"
+        "货币资金",
+        "现金及现金等价物"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额"
     },
     "inventory_begin": {
       "keywords": [
-        "å­è´§"
+        "存货"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "å¹´åä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "年初余额"
     },
     "inventory_end": {
       "keywords": [
-        "å­è´§"
+        "存货"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额"
     },
     "ar_begin": {
       "keywords": [
-        "åºæ¶è´¦æ¬¾",
-        "åºæ¶å¸æ¬¾"
+        "应收账款",
+        "应收帐款"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "å¹´åä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "年初余额"
     },
     "ar_end": {
       "keywords": [
-        "åºæ¶è´¦æ¬¾",
-        "åºæ¶å¸æ¬¾"
+        "应收账款",
+        "应收帐款"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额"
     },
     "liabilities_total_end": {
       "keywords": [
-        "è´åºåè®¡",
-        "è´åºæ»è®¡",
-        "è´åºæ»é¢"
+        "负债合计",
+        "负债总计",
+        "负债总额"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额"
     },
     "current_liabilities_end": {
       "keywords": [
-        "æµå¨è´åºåè®¡",
-        "æµå¨è´åºæ»è®¡"
+        "流动负债合计",
+        "流动负债总计"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额"
     },
     "equity_total_end": {
       "keywords": [
-        "ææèæçåè®¡",
-        "è¡ä¸æçåè®¡",
-        "æçåè®¡"
+        "所有者权益合计",
+        "股东权益合计",
+        "权益合计"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额"
     },
     "revenue_m": {
       "keywords": [
-        "è¥ä¸æ¶å¥",
-        "ä¸»è¥ä¸å¡æ¶å¥"
+        "营业收入",
+        "主营业务收入"
       ],
-      "sheet_type": "å©æ¶¦è¡¨",
-      "time_attr": "æ¬æéé¢"
+      "sheet_type": "利润表",
+      "time_attr": "本期金额"
     },
     "revenue_ytd": {
       "keywords": [
-        "è¥ä¸æ¶å¥",
-        "ä¸»è¥ä¸å¡æ¶å¥"
+        "营业收入",
+        "主营业务收入"
       ],
-      "sheet_type": "å©æ¶¦è¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "利润表",
+      "time_attr": "本年累计金额"
     },
     "main_revenue_ytd": {
       "keywords": [
-        "ä¸»è¥ä¸å¡æ¶å¥"
+        "主营业务收入"
       ],
-      "sheet_type": "å©æ¶¦è¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "利润表",
+      "time_attr": "本年累计金额"
     },
     "cost_ytd": {
       "keywords": [
-        "è¥ä¸ææ¬",
-        "ä¸»è¥ä¸å¡ææ¬"
+        "营业成本",
+        "主营业务成本"
       ],
-      "sheet_type": "å©æ¶¦è¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "利润表",
+      "time_attr": "本年累计金额"
     },
     "operating_profit_ytd": {
       "keywords": [
-        "è¥ä¸å©æ¶¦"
+        "营业利润"
       ],
-      "sheet_type": "å©æ¶¦è¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "利润表",
+      "time_attr": "本年累计金额"
     },
     "net_profit_ytd": {
       "keywords": [
-        "åå©æ¶¦"
+        "净利润"
       ],
-      "sheet_type": "å©æ¶¦è¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "利润表",
+      "time_attr": "本年累计金额"
     },
     "rd_m": {
       "keywords": [
-        "ç åè´¹ç¨"
+        "研发费用"
       ],
-      "sheet_type": "å©æ¶¦è¡¨",
-      "time_attr": "æ¬æéé¢"
+      "sheet_type": "利润表",
+      "time_attr": "本期金额"
     },
     "rd_ytd": {
       "keywords": [
-        "ç åè´¹ç¨"
+        "研发费用"
       ],
-      "sheet_type": "å©æ¶¦è¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "利润表",
+      "time_attr": "本年累计金额"
     },
     "operating_cf_ytd": {
       "keywords": [
-        "ç»è¥æ´»å¨äº§ççç°éæµéåé¢",
-        "ç»è¥æ´»å¨ç°éæµéåé¢"
+        "经营活动产生的现金流量净额",
+        "经营活动现金流量净额"
       ],
-      "sheet_type": "ç°éæµéè¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "现金流量表",
+      "time_attr": "本年累计金额"
     },
     "investing_cf_ytd": {
       "keywords": [
-        "æèµæ´»å¨äº§ççç°éæµéåé¢",
-        "æèµæ´»å¨ç°éæµéåé¢"
+        "投资活动产生的现金流量净额",
+        "投资活动现金流量净额"
       ],
-      "sheet_type": "ç°éæµéè¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "现金流量表",
+      "time_attr": "本年累计金额"
     },
     "financing_cf_ytd": {
       "keywords": [
-        "ç­¹èµæ´»å¨äº§ççç°éæµéåé¢",
-        "ç­¹èµæ´»å¨ç°éæµéåé¢"
+        "筹资活动产生的现金流量净额",
+        "筹资活动现金流量净额"
       ],
-      "sheet_type": "ç°éæµéè¡¨",
-      "time_attr": "æ¬å¹´ç´¯è®¡éé¢"
+      "sheet_type": "现金流量表",
+      "time_attr": "本年累计金额"
     },
     "products_begin": {
       "keywords": [
-        "äº§æå(åºå­åå)",
-        "äº§æå",
-        "åºå­åå"
+        "产成品(库存商品)",
+        "产成品",
+        "库存商品"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "å¹´åä½é¢",
-      "category": "èµäº§"
+      "sheet_type": "资产负债表",
+      "time_attr": "年初余额",
+      "category": "资产"
     },
     "products_end": {
       "keywords": [
-        "äº§æå(åºå­åå)",
-        "äº§æå",
-        "åºå­åå"
+        "产成品(库存商品)",
+        "产成品",
+        "库存商品"
       ],
-      "sheet_type": "èµäº§è´åºè¡¨",
-      "time_attr": "ææ«ä½é¢",
-      "category": "èµäº§"
+      "sheet_type": "资产负债表",
+      "time_attr": "期末余额",
+      "category": "资产"
     }
   },
   "metrics": [
     {
-      "name": "æµå¨æ¯ç",
+      "name": "流动比率",
       "formula": "safe_div(current_assets_end, current_liabilities_end)",
       "format": "percent"
     },
     {
-      "name": "éå¨æ¯ç",
+      "name": "速动比率",
       "formula": "safe_div(current_assets_end - inventory_end, current_liabilities_end)",
       "format": "percent"
     },
     {
-      "name": "ç°éæ¯ç",
+      "name": "现金比率",
       "formula": "safe_div(cash_end, current_liabilities_end)",
       "format": "percent"
     },
     {
-      "name": "èµäº§è´åºç",
+      "name": "资产负债率",
       "formula": "safe_div(liabilities_total_end, assets_total_end)",
       "format": "percent"
     },
     {
-      "name": "äº§ææ¯ç",
+      "name": "产权比率",
       "formula": "safe_div(liabilities_total_end, equity_total_end)",
       "format": "percent"
     },
     {
-      "name": "æçä¹æ°",
+      "name": "权益乘数",
       "formula": "safe_div(assets_total_end, equity_total_end)",
       "format": "percent"
     },
     {
-      "name": "æ¯å©ç",
+      "name": "毛利率",
       "formula": "safe_div(revenue_ytd - cost_ytd, revenue_ytd)",
       "format": "percent"
     },
     {
-      "name": "è¥ä¸å©æ¶¦ç",
+      "name": "营业利润率",
       "formula": "safe_div(operating_profit_ytd, revenue_ytd)",
       "format": "percent"
     },
     {
-      "name": "åå©ç",
+      "name": "净利率",
       "formula": "safe_div(net_profit_ytd, revenue_ytd)",
       "format": "percent"
     },
     {
-      "name": "ROE(åèµäº§æ¶çç)",
+      "name": "ROE(净资产收益率)",
       "formula": "safe_div(net_profit_ytd, equity_total_end)",
       "format": "percent"
     },
     {
-      "name": "ROA(æ»èµäº§æ¶çç)",
+      "name": "ROA(总资产收益率)",
       "formula": "safe_div(net_profit_ytd, assets_total_end)",
       "format": "percent"
     },
     {
-      "name": "ç»è¥æ´»å¨ç°éæµåé¢",
+      "name": "经营活动现金流净额",
       "formula": "operating_cf_ytd",
       "format": "number"
     },
     {
-      "name": "æèµæ´»å¨ç°éæµåé¢",
+      "name": "投资活动现金流净额",
       "formula": "investing_cf_ytd",
       "format": "number"
     },
     {
-      "name": "ç­¹èµæ´»å¨ç°éæµåé¢",
+      "name": "筹资活动现金流净额",
       "formula": "financing_cf_ytd",
       "format": "number"
     },
     {
-      "name": "ç°éæµéæ¯ç",
+      "name": "现金流量比率",
       "formula": "safe_div(operating_cf_ytd, current_liabilities_end)",
       "format": "percent"
     },
     {
-      "name": "å½æç åæå¥å¼ºåº¦",
+      "name": "当月研发投入强度",
       "formula": "safe_div(rd_m, revenue_m)",
       "format": "percent"
     },
     {
-      "name": "æ¬å¹´ç åæå¥å¼ºåº¦",
+      "name": "本年研发投入强度",
       "formula": "safe_div(rd_ytd, revenue_ytd)",
       "format": "percent"
     },
     {
-      "name": "æ¬å¹´ç°ä»·å·¥ä¸æ»äº§å¼",
+      "name": "本年现价工业总产值",
       "formula": "(main_revenue_ytd or 0.0) + (products_end - products_begin)",
       "format": "number"
     },
     {
-      "name": "åºæ¶è´¦æ¬¾å¨è½¬ç",
+      "name": "应收账款周转率",
       "formula": "safe_div(revenue_ytd, ar_begin + ar_end)",
       "format": "round2"
     },
     {
-      "name": "å­è´§å¨è½¬ç",
+      "name": "存货周转率",
       "formula": "safe_div(cost_ytd, inventory_begin + inventory_end)",
       "format": "round2"
     }

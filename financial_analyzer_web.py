@@ -427,6 +427,11 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             if not isinstance(rules_obj, dict):
                 return {"ok": False, "message": "rules 必须是 JSON 对象(dict)"}
 
+            try:
+                rules_obj = core._repair_mojibake_obj(rules_obj)
+            except Exception:
+                pass
+
             path = os.path.join(get_base_dir(), "config", "rules.json")
             os.makedirs(os.path.dirname(path) or os.getcwd(), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:

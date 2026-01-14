@@ -1,7 +1,6 @@
 import os
 import subprocess
 import sys
-import shutil
 
 def build():
     # 确保安装了 pyinstaller
@@ -15,8 +14,13 @@ def build():
 
     # 打包命令参数
     params = [
-        "pyinstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
         "--noconfirm",
+        "--clean",
+        "--exclude-module", "matplotlib",
+        "--exclude-module", "PIL",
         "--onefile",
         "--console", # Web 程序建议保留 console 以便查看后台日志，或者用 --windowed 隐藏
         "--name", "财务数据分析工具",
@@ -33,7 +37,7 @@ def build():
     # 设置图标
     icon_path = "app_icon.ico"
     if os.path.exists(icon_path):
-        params.insert(1, f"--icon={icon_path}")
+        params.insert(3, f"--icon={icon_path}")
     
     try:
         subprocess.check_call(params)
@@ -43,6 +47,7 @@ def build():
         print("="*30)
     except subprocess.CalledProcessError as e:
         print(f"打包失败: {e}")
+        raise SystemExit(1)
 
 if __name__ == "__main__":
     # 检查当前目录下是否有必要的文件
@@ -52,6 +57,10 @@ if __name__ == "__main__":
     
     if not os.path.exists("web"):
         print("错误：未找到 web 静态资源目录")
+        sys.exit(1)
+    
+    if not os.path.exists("config"):
+        print("错误：未找到 config 配置目录")
         sys.exit(1)
 
     build()

@@ -92,6 +92,64 @@ def _resolve_under_base(path: str) -> str:
 
 _RULES_CACHE: Dict[str, Any] = {"mtime": None, "data": None, "aliases": None}
 
+def _cjk_count(s: str) -> int:
+    return sum(1 for ch in (s or "") if "\u4e00" <= ch <= "\u9fff")
+
+def _maybe_fix_mojibake_str(s: Any) -> Any:
+    if not isinstance(s, str) or not s:
+        return s
+    if _cjk_count(s) > 0:
+        return s
+    try:
+        raw = s.encode("latin-1")
+    except Exception:
+        return s
+    try:
+        fixed = raw.decode("utf-8")
+    except Exception:
+        return s
+    if not fixed or fixed == s:
+        return s
+    if _cjk_count(fixed) == 0:
+        return s
+    return fixed
+
+def _repair_mojibake_obj(obj: Any) -> Any:
+    if obj is None:
+        return None
+    if isinstance(obj, str):
+        return _maybe_fix_mojibake_str(obj)
+    if isinstance(obj, list):
+        items = [_repair_mojibake_obj(x) for x in obj]
+        if items and all(isinstance(x, str) for x in items):
+            if all(_cjk_count(x) == 0 for x in items):
+                try:
+                    bs_parts = []
+                    for x in items:
+                        bs_parts.append(x.encode("latin-1"))
+                    merged = b"\xa0".join(bs_parts)
+                    fixed = merged.decode("utf-8")
+                    if fixed and _cjk_count(fixed) > 0:
+                        return [fixed]
+                except Exception:
+                    pass
+        return items
+    if isinstance(obj, dict):
+        out: Dict[Any, Any] = {}
+        for k, v in obj.items():
+            kk = _repair_mojibake_obj(k) if isinstance(k, str) else k
+            vv = _repair_mojibake_obj(v)
+            if kk in out and isinstance(out.get(kk), list) and isinstance(vv, list):
+                merged = list(out[kk])
+                for it in vv:
+                    if it not in merged:
+                        merged.append(it)
+                out[kk] = merged
+            else:
+                out[kk] = vv
+        return out
+    return obj
+
 
 def _rules_path() -> str:
     return os.path.join(get_base_dir(), "config", "rules.json")
@@ -145,6 +203,20 @@ def _load_rules() -> Dict[str, Any]:
             data = raw
     except Exception:
         data = {}
+
+    try:
+        repaired = _repair_mojibake_obj(data)
+        if isinstance(repaired, dict) and repaired != data:
+            data = repaired
+            _ensure_dir(os.path.dirname(p) or os.getcwd())
+            with open(p, "w", encoding="utf-8") as wf:
+                json.dump(data, wf, ensure_ascii=False, indent=2)
+            try:
+                mtime = float(os.path.getmtime(p))
+            except Exception:
+                mtime = None
+    except Exception:
+        pass
 
     aliases = {}
     try:
