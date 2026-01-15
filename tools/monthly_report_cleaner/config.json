@@ -43,5 +43,24 @@
     ]
   ],
   "validation_tolerance": 0.01,
-  "saved_queries": {}
+  "col_keyword_subject": [
+    "资产",
+    "项目",
+    "科目",
+    "摘要"
+  ],
+  "col_keyword_period_end": [
+    "期末",
+    "本期",
+    "本年",
+    "金额"
+  ],
+  "col_keyword_period_start": [
+    "上年",
+    "上期",
+    "年初"
+  ],
+  "saved_queries": {},
+  "tool_id": "monthly_report_cleaner",
+  "tool_params": {}
 }

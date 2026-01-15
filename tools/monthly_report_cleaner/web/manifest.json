@@ -1,0 +1,11 @@
+{
+  "name": "清洗/验证/指标",
+  "entry": "index.html",
+  "version": "1.0.0",
+  "tabs": [
+    { "id": "config", "name": "配置", "icon": "bi-sliders" },
+    { "id": "query", "name": "查询", "icon": "bi-search" },
+    { "id": "results", "name": "结果", "icon": "bi-table" },
+    { "id": "rules", "name": "规则", "icon": "bi-braces" }
+  ]
+}

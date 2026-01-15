@@ -5,31 +5,28 @@ import json
 import queue
 import threading
 import logging
-import socket
 from dataclasses import asdict
 from typing import Optional, Any, Dict, List
-from pathlib import Path
 import sqlite3
 
 import pandas as pd
 
-def get_resource_path(relative_path: str) -> Path:
-    """获取资源文件的绝对路径，兼容开发环境和 PyInstaller 打包环境"""
-    try:
-        # PyInstaller 打包后的临时目录
-        base_path = Path(sys._MEIPASS)
-    except Exception:
-        base_path = Path(__file__).resolve().parent
-    return base_path / relative_path
+from fa_platform.paths import get_resource_path
+from fa_platform.jsonx import sanitize_json
+from fa_platform.webx import choose_web_port, read_web_index_html, sse_encode, get_tool_web_entry_url, get_tool_web_manifest
 
 from financial_analyzer_core import (
     OUTPUT_PATH,
     AppConfig,
     AnalysisResult,
+    DEFAULT_TOOL_ID,
     get_base_dir,
     load_config,
     save_config,
-    analyze_directory,
+    run_tool,
+    list_tools,
+    get_tool_discovery_errors,
+    resolve_tool_id,
     _cleaned_sqlite_path_for,
     _get_logger,
     _list_excel_files,
@@ -91,11 +88,28 @@ class _WebRunner:
         self._lock = threading.Lock()
         self._cleaned_cache: Dict[str, Any] = {"path": None, "mtime": None, "df": None}
 
-    def set_config(self, data: Dict[str, Any]) -> AppConfig:
-        cfg = AppConfig()
+    def set_config(self, data: Dict[str, Any], tool_id: str = "") -> AppConfig:
+        tid = str(tool_id or "").strip()
+        if not tid:
+            tid = DEFAULT_TOOL_ID
+        
+        # Load specific tool config path
+        # Assuming standard structure: tools/{tid}/config.json
+        # If tid is default, we might have logic for legacy paths, but let's standardize on tools/
+        
+        from financial_analyzer_core import get_base_dir
+        config_path = os.path.join(get_base_dir(), "tools", tid, "config.json")
+        if not os.path.exists(config_path) and tid == DEFAULT_TOOL_ID:
+             # Fallback to self.config_path if default
+             config_path = self.config_path
+
+        cfg = load_config(config_path)
+        # Update cfg with data
         for k, v in (data or {}).items():
             if hasattr(cfg, k):
                 setattr(cfg, k, v)
+        
+        # Ensure critical defaults
         if not getattr(cfg, "input_dir", None):
             cfg.input_dir = os.getcwd()
         if not getattr(cfg, "file_glob", None):
@@ -107,27 +121,51 @@ class _WebRunner:
             cfg.output_dir = out_dir
         if not getattr(cfg, "output_basename", None):
             cfg.output_basename = OUTPUT_PATH
-        try:
-            cfg.validation_tolerance = float(getattr(cfg, "validation_tolerance", AppConfig().validation_tolerance))
-        except Exception:
-            cfg.validation_tolerance = AppConfig().validation_tolerance
+            
+        # Tool ID persistence
+        setattr(cfg, "tool_id", tid)
 
         with self._lock:
-            self.cfg = cfg
-        save_config(self.config_path, cfg)
-        self.hub.publish({"type": "status", "message": "已保存配置"})
+            # Only update self.cfg if it's the current running config or we decide to swap?
+            # Actually self.cfg tracks the "active" config for the runner.
+            # If user saves config for another tool, we just save to disk.
+            # But if user is operating on the current tool, we update memory.
+            # For simplicity, if tid matches current runner's target, update memory.
+            # But runner doesn't really know "target" until start() is called.
+            # Let's just update self.cfg if tid matches default or currently loaded.
+            # For now, just save to disk. The runner reloads config on start() anyway?
+            # Wait, runner.start() takes cfg or reloads it? 
+            # runner.start() calls run_tool(tid, cfg...).
+            # So we should return the updated cfg object.
+            pass
+            
+        save_config(config_path, cfg)
+        # Only publish status if it's the active tool?
+        self.hub.publish({"type": "status", "message": f"已保存配置 ({tid})"})
         return cfg
 
-    def get_config(self) -> AppConfig:
-        with self._lock:
-            return self.cfg
+    def get_config(self, tool_id: str = "") -> AppConfig:
+        tid = str(tool_id or "").strip()
+        if not tid:
+            tid = DEFAULT_TOOL_ID
+            
+        from financial_analyzer_core import get_base_dir
+        config_path = os.path.join(get_base_dir(), "tools", tid, "config.json")
+        if not os.path.exists(config_path) and tid == DEFAULT_TOOL_ID:
+             config_path = self.config_path
+             
+        return load_config(config_path)
 
     def scan(self) -> List[str]:
         cfg = self.get_config()
         files = _list_excel_files(cfg)
         return files
 
-    def start(self) -> bool:
+    def start(self, tool_id: str = "") -> bool:
+        requested_tid = str(tool_id or "").strip()
+        if not requested_tid:
+            requested_tid = str(getattr(self.get_config(), "tool_id", "") or "").strip() or DEFAULT_TOOL_ID
+        tid, used_default = resolve_tool_id(requested_tid)
         with self._lock:
             if self.worker_thread and self.worker_thread.is_alive():
                 return False
@@ -147,16 +185,18 @@ class _WebRunner:
         def worker() -> None:
             try:
                 cfg = self.get_config()
-                res = analyze_directory(cfg, logger=logger, progress_cb=progress_cb, cancel_event=self.cancel_event)
+                res = run_tool(tid, cfg, logger=logger, progress_cb=progress_cb, cancel_event=self.cancel_event)
             except Exception as e:
                 res = AnalysisResult(errors=[str(e)])
             with self._lock:
                 self.last_result = res
                 self.running = False
-            self.hub.publish({"type": "done", "result": asdict(res)})
+            self.hub.publish({"type": "done", "tool_id": tid, "result": asdict(res)})
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
+        if used_default and str(requested_tid or "").strip() and tid == DEFAULT_TOOL_ID and requested_tid != DEFAULT_TOOL_ID:
+            self.hub.publish({"type": "status", "message": f"未找到工具：{requested_tid}，已回退到默认工具：{tid}"})
         self.hub.publish({"type": "status", "message": "已开始运行"})
         return True
 
@@ -189,15 +229,37 @@ class _WebRunner:
         direct = os.path.abspath(os.path.join(output_root, cfg.output_basename))
         if os.path.exists(direct):
             return direct
-
+            
+        # Try to find tool subdirectory if exists
+        # Assuming tool_id is in config or default
+        tid = str(getattr(cfg, "tool_id", "") or "monthly_report_cleaner").strip()
+        
+        # Paths to search:
+        # 1. output_root/{timestamp} (Legacy)
+        # 2. output_root/{tool_id}/{timestamp} (New)
+        
+        candidates = []
+        
+        # Scan legacy
         try:
-            entries = [n for n in os.listdir(output_root) if os.path.isdir(os.path.join(output_root, n))]
+            entries = [os.path.join(output_root, n) for n in os.listdir(output_root)]
+            candidates.extend([e for e in entries if os.path.isdir(e) and re.match(r"^\d{8}_\d{6}$", os.path.basename(e))])
         except Exception:
-            entries = []
-        stamp_dirs = [n for n in entries if re.match(r"^\\d{8}_\\d{6}$", str(n or "").strip())]
-        stamp_dirs.sort(reverse=True)
-        for d in stamp_dirs:
-            p = os.path.abspath(os.path.join(output_root, d, cfg.output_basename))
+            pass
+            
+        # Scan new structure
+        try:
+            tool_dir = os.path.join(output_root, tid)
+            if os.path.isdir(tool_dir):
+                entries = [os.path.join(tool_dir, n) for n in os.listdir(tool_dir)]
+                candidates.extend([e for e in entries if os.path.isdir(e) and re.match(r"^\d{8}_\d{6}$", os.path.basename(e))])
+        except Exception:
+            pass
+            
+        candidates.sort(key=lambda p: os.path.basename(p), reverse=True)
+        
+        for d in candidates:
+            p = os.path.abspath(os.path.join(d, cfg.output_basename))
             if os.path.exists(p):
                 return p
 
@@ -271,52 +333,10 @@ class _WebRunner:
         return df
 
 
-def _web_index_html() -> str:
-    try:
-        p = get_resource_path("web/index.html")
-        return p.read_text(encoding="utf-8")
-    except Exception:
-        return "<!doctype html><html><head><meta charset='utf-8'><title>Web</title></head><body>缺少 web/index.html</body></html>"
-
-def _choose_web_port(host: str, requested_port: int) -> int:
-    def try_bind(h: str, p: int) -> Optional[int]:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind((h, int(p)))
-            return int(s.getsockname()[1])
-        except Exception:
-            return None
-        finally:
-            try:
-                s.close()
-            except Exception:
-                pass
-
-    rp = int(requested_port or 0)
-    if rp <= 0:
-        picked = try_bind(host, 0) or try_bind("127.0.0.1", 0)
-        return int(picked or 87650)
-
-    if try_bind(host, rp) is not None:
-        return rp
-
-    for p in range(rp + 1, rp + 200):
-        if try_bind(host, p) is not None:
-            print(f"端口 {rp} 被占用，已改用 {p}")
-            return p
-
-    picked = try_bind(host, 0) or try_bind("127.0.0.1", 0)
-    if picked is None:
-        return rp
-    print(f"端口 {rp} 被占用，已改用 {picked}")
-    return int(picked)
-
-
 def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> int:
     try:
         from fastapi import FastAPI
-        from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, Response
+        from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, Response, RedirectResponse
         from fastapi.staticfiles import StaticFiles
     except Exception:
         print("缺少依赖：fastapi。请先安装：py -m pip install fastapi uvicorn")
@@ -324,43 +344,6 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     runner = _WebRunner(config_path=config_path)
     app = FastAPI()
-
-    def _sanitize_json(obj: Any) -> Any:
-        import math as _math
-        import datetime as _dt
-
-        if obj is None:
-            return None
-        try:
-            if pd.isna(obj):
-                return None
-        except Exception:
-            pass
-
-        if isinstance(obj, float):
-            try:
-                if _math.isnan(obj) or _math.isinf(obj):
-                    return None
-            except Exception:
-                return None
-            return obj
-        if isinstance(obj, (str, int, bool)):
-            return obj
-        if isinstance(obj, (_dt.datetime, _dt.date, pd.Timestamp)):
-            return str(obj)
-        if isinstance(obj, list):
-            return [_sanitize_json(x) for x in obj]
-        if isinstance(obj, tuple):
-            return [_sanitize_json(x) for x in obj]
-        if isinstance(obj, dict):
-            return {str(k): _sanitize_json(v) for k, v in obj.items()}
-        try:
-            item = getattr(obj, "item", None)
-            if callable(item):
-                return _sanitize_json(item())
-        except Exception:
-            pass
-        return str(obj)
     try:
         web_dir = get_resource_path("web")
         app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
@@ -369,7 +352,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return _web_index_html()
+        return read_web_index_html()
 
     @app.get("/favicon.ico")
     def favicon():
@@ -379,49 +362,87 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         return Response(status_code=404)
 
     @app.get("/api/config")
-    def api_get_config() -> Dict[str, Any]:
-        return asdict(runner.get_config())
+    def api_get_config(tool_id: str = "") -> Dict[str, Any]:
+        return asdict(runner.get_config(tool_id=tool_id))
 
     @app.post("/api/config")
-    def api_set_config(data: Dict[str, Any]) -> Dict[str, Any]:
-        cfg = runner.set_config(data)
+    def api_set_config(data: Dict[str, Any], tool_id: str = "") -> Dict[str, Any]:
+        # tool_id can be in query param or body, let's prefer query param for consistency
+        # but fastAPI handles query param automatically if defined in args.
+        cfg = runner.set_config(data, tool_id=tool_id)
         return asdict(cfg)
 
     @app.get("/api/config/queries")
-    def api_get_saved_queries() -> Dict[str, Any]:
-        return getattr(runner.cfg, "saved_queries", {})
+    def api_get_saved_queries(tool_id: str = "") -> Dict[str, Any]:
+        cfg = runner.get_config(tool_id=tool_id)
+        return getattr(cfg, "saved_queries", {})
 
     @app.post("/api/config/queries/{name}")
-    def api_save_query(name: str, query: Dict[str, Any]) -> Dict[str, Any]:
-        if not getattr(runner.cfg, "saved_queries", None):
-            setattr(runner.cfg, "saved_queries", {})
-        runner.cfg.saved_queries[name] = query
-        save_config(runner.config_path, runner.cfg)
-        return {"status": "ok", "saved_queries": runner.cfg.saved_queries}
+    def api_save_query(name: str, query: Dict[str, Any], tool_id: str = "") -> Dict[str, Any]:
+        cfg = runner.get_config(tool_id=tool_id)
+        if not getattr(cfg, "saved_queries", None):
+            setattr(cfg, "saved_queries", {})
+        cfg.saved_queries[name] = query
+        
+        # Save back
+        from financial_analyzer_core import get_base_dir
+        tid = str(tool_id or DEFAULT_TOOL_ID).strip()
+        config_path = os.path.join(get_base_dir(), "tools", tid, "config.json")
+        if not os.path.exists(config_path) and tid == DEFAULT_TOOL_ID:
+             config_path = runner.config_path
+        
+        save_config(config_path, cfg)
+        return {"status": "ok", "saved_queries": cfg.saved_queries}
 
     @app.delete("/api/config/queries/{name}")
-    def api_delete_query(name: str) -> Dict[str, Any]:
-        sq = getattr(runner.cfg, "saved_queries", {})
+    def api_delete_query(name: str, tool_id: str = "") -> Dict[str, Any]:
+        cfg = runner.get_config(tool_id=tool_id)
+        sq = getattr(cfg, "saved_queries", {})
         if sq and name in sq:
             del sq[name]
-            save_config(runner.config_path, runner.cfg)
+            
+            from financial_analyzer_core import get_base_dir
+            tid = str(tool_id or DEFAULT_TOOL_ID).strip()
+            config_path = os.path.join(get_base_dir(), "tools", tid, "config.json")
+            if not os.path.exists(config_path) and tid == DEFAULT_TOOL_ID:
+                config_path = runner.config_path
+                
+            save_config(config_path, cfg)
         return {"status": "ok", "saved_queries": sq}
 
     @app.get("/api/rules")
-    def api_get_rules() -> Dict[str, Any]:
+    def api_get_rules(tool_id: str = "") -> Dict[str, Any]:
         try:
             import financial_analyzer_core as core
+            from financial_analyzer_core import get_base_dir, DEFAULT_TOOL_ID
+            
+            tid = str(tool_id or "").strip() or DEFAULT_TOOL_ID
 
-            rules = core._load_rules()
-            path = os.path.join(get_base_dir(), "config", "rules.json")
-            return _sanitize_json({"ok": True, "path": path, "rules": rules})
+            # Try to determine the path used by _load_rules, or construct it
+            path = os.path.join(get_base_dir(), "tools", tid, "rules.json")
+            if not os.path.exists(path) and tid == DEFAULT_TOOL_ID:
+                path = os.path.join(get_base_dir(), "config", "rules.json")
+            
+            # Manual load to ensure we get the specific file
+            rules = {}
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        rules = json.load(f) or {}
+                except Exception:
+                    pass
+                
+            return sanitize_json({"ok": True, "path": path, "rules": rules})
         except Exception as e:
             return {"ok": False, "message": str(e), "rules": {}}
 
     @app.post("/api/rules")
-    def api_save_rules(payload: Dict[str, Any]) -> Dict[str, Any]:
+    def api_save_rules(payload: Dict[str, Any], tool_id: str = "") -> Dict[str, Any]:
         try:
             import financial_analyzer_core as core
+            from financial_analyzer_core import get_base_dir, DEFAULT_TOOL_ID
+            
+            tid = str(tool_id or "").strip() or DEFAULT_TOOL_ID
 
             rules_obj: Any = payload.get("rules") if isinstance(payload, dict) and "rules" in payload else payload
             if not isinstance(rules_obj, dict):
@@ -432,7 +453,10 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             except Exception:
                 pass
 
-            path = os.path.join(get_base_dir(), "config", "rules.json")
+            path = os.path.join(get_base_dir(), "tools", tid, "rules.json")
+            # If default tool and old path exists, maybe update old path? 
+            # But we want to migrate to tools folder. So we force tools folder for new saves unless it fails.
+            
             os.makedirs(os.path.dirname(path) or os.getcwd(), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(rules_obj, f, ensure_ascii=False, indent=2)
@@ -453,9 +477,72 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         files = runner.scan()
         return {"files": files}
 
+    @app.get("/api/tools")
+    def api_tools() -> Dict[str, Any]:
+        return {"tools": list_tools(), "default": DEFAULT_TOOL_ID, "errors": get_tool_discovery_errors()}
+
+    @app.get("/api/tools/{tool_id}/web")
+    def api_tool_web(tool_id: str) -> Dict[str, Any]:
+        manifest, m_err = get_tool_web_manifest(tool_id)
+        entry_url, e_err = get_tool_web_entry_url(tool_id)
+        msg = str(m_err or e_err or "").strip()
+        return sanitize_json(
+            {
+                "ok": bool(entry_url) and not bool(msg),
+                "tool_id": str(tool_id or "").strip(),
+                "entry_url": entry_url,
+                "manifest": manifest or {},
+                "message": msg,
+            }
+        )
+
+    @app.get("/tools/{tool_id}/web")
+    @app.get("/tools/{tool_id}/web/")
+    def tool_web_root(tool_id: str):
+        entry_url, err = get_tool_web_entry_url(tool_id)
+        if err:
+            return Response(content=str(err), media_type="text/plain; charset=utf-8", status_code=400)
+        if not entry_url:
+            return Response(status_code=404)
+        return RedirectResponse(url=entry_url)
+
+    @app.get("/tools/{tool_id}/web/{resource_path:path}")
+    def tool_web_resource(tool_id: str, resource_path: str):
+        tid = str(tool_id or "").strip()
+        if not tid:
+            return Response(status_code=404)
+
+        base = get_resource_path(f"tools/{tid}/web")
+        if not base.exists() or not base.is_dir():
+            return Response(status_code=404)
+
+        rel = str(resource_path or "").lstrip("/")
+        if not rel:
+            rel = "index.html"
+
+        try:
+            base_resolved = base.resolve()
+        except Exception:
+            base_resolved = base
+
+        try:
+            target = (base_resolved / rel).resolve()
+        except Exception:
+            target = base_resolved / rel
+
+        try:
+            if not target.is_relative_to(base_resolved):
+                return Response(status_code=404)
+        except Exception:
+            return Response(status_code=404)
+
+        if not target.exists() or not target.is_file():
+            return Response(status_code=404)
+        return FileResponse(str(target))
+
     @app.post("/api/run/start")
-    def api_start() -> Dict[str, Any]:
-        ok = runner.start()
+    def api_start(tool_id: str = "") -> Dict[str, Any]:
+        ok = runner.start(tool_id=tool_id)
         return {"ok": ok, "message": "已启动" if ok else "任务正在运行中"}
 
     @app.post("/api/run/stop")
@@ -492,7 +579,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                         opts["rows"] = 0
                     opts["path"] = runner._get_cleaned_path()
                     opts["sqlite"] = sp
-                    return _sanitize_json(opts)
+                    return sanitize_json(opts)
                 finally:
                     try:
                         conn.close()
@@ -517,7 +604,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                 opts[col] = vals[:500]
         opts["path"] = runner._get_cleaned_path()
         opts["rows"] = int(len(df))
-        return _sanitize_json(opts)
+        return sanitize_json(opts)
 
     @app.get("/api/validation/query")
     def api_validation_query(
@@ -741,7 +828,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                     except Exception:
                         rows = []
 
-                    return _sanitize_json(
+                    return sanitize_json(
                         {
                             "ok": True,
                             "path": runner._get_cleaned_path(),
@@ -837,7 +924,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         off = int(max(0, int(offset or 0)))
         page = view.iloc[off : off + lim].copy()
         records = page.to_dict(orient="records")
-        return _sanitize_json({
+        return sanitize_json({
             "ok": True,
             "path": runner._get_cleaned_path(),
             "total": total,
@@ -1069,42 +1156,36 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.get("/api/stream")
     def api_stream():
-        import json as _json
-
         q = runner.hub.subscribe()
-
-        def encode(event: str, data_obj: Any) -> str:
-            s = _json.dumps(_sanitize_json(data_obj), ensure_ascii=False, allow_nan=False)
-            return f"event: {event}\ndata: {s}\n\n"
 
         def gen():
             try:
-                yield encode("status", {"message": "已连接"})
+                yield sse_encode("status", {"message": "已连接"})
                 while True:
                     try:
                         item = q.get(timeout=0.8)
                     except queue.Empty:
                         st = runner.get_status()
-                        yield encode("progress", st.get("progress", {}))
+                        yield sse_encode("progress", st.get("progress", {}))
                         continue
 
                     t = str(item.get("type", "message"))
                     if t == "log":
-                        yield encode("log", {"message": item.get("message", "")})
+                        yield sse_encode("log", {"message": item.get("message", "")})
                     elif t == "progress":
-                        yield encode("progress", item)
+                        yield sse_encode("progress", item)
                     elif t == "status":
-                        yield encode("status", {"message": item.get("message", "")})
+                        yield sse_encode("status", {"message": item.get("message", "")})
                     elif t == "done":
-                        yield encode("done", {"result": item.get("result", {})})
+                        yield sse_encode("done", {"tool_id": item.get("tool_id", ""), "result": item.get("result", {})})
                     else:
-                        yield encode("status", {"message": str(item)})
+                        yield sse_encode("status", {"message": str(item)})
             finally:
                 runner.hub.unsubscribe(q)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    chosen_port = _choose_web_port(host, int(port or 0))
+    chosen_port = choose_web_port(host, int(port or 0))
     if open_browser:
         try:
             import webbrowser

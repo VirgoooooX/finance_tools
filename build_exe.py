@@ -28,6 +28,8 @@ def build():
         "--add-data", f"web{os.pathsep}web",
         # 包含默认配置文件（如果存在）
         "--add-data", f"config{os.pathsep}config",
+        # 包含 tools 插件目录
+        "--add-data", f"tools{os.pathsep}tools",
         # 包含 Web favicon/资源图标
         "--add-data", f"app_icon.ico{os.pathsep}.",
         # 入口文件
