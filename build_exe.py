@@ -12,7 +12,6 @@ def build():
 
     print("开始打包程序...")
 
-    # 打包命令参数
     params = [
         sys.executable,
         "-m",
@@ -24,17 +23,18 @@ def build():
         "--onefile",
         "--console", # Web 程序建议保留 console 以便查看后台日志，或者用 --windowed 隐藏
         "--name", "财务数据分析工具",
-        # 包含 web 静态资源目录
-        "--add-data", f"web{os.pathsep}web",
-        # 包含默认配置文件（如果存在）
-        "--add-data", f"config{os.pathsep}config",
-        # 包含 tools 插件目录
-        "--add-data", f"tools{os.pathsep}tools",
-        # 包含 Web favicon/资源图标
-        "--add-data", f"app_icon.ico{os.pathsep}.",
         # 入口文件
         "financial_analyzer.py"
     ]
+
+    if os.path.exists("web"):
+        params.extend(["--add-data", f"web{os.pathsep}web"])
+    if os.path.exists("tools"):
+        params.extend(["--add-data", f"tools{os.pathsep}tools"])
+    if os.path.exists("config"):
+        params.extend(["--add-data", f"config{os.pathsep}config"])
+    if os.path.exists("app_icon.ico"):
+        params.extend(["--add-data", f"app_icon.ico{os.pathsep}."])
 
     # 设置图标
     icon_path = "app_icon.ico"
@@ -59,10 +59,6 @@ if __name__ == "__main__":
     
     if not os.path.exists("web"):
         print("错误：未找到 web 静态资源目录")
-        sys.exit(1)
-    
-    if not os.path.exists("config"):
-        print("错误：未找到 config 配置目录")
         sys.exit(1)
 
     build()

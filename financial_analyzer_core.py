@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import importlib.util
+import argparse
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Any, Dict, List, Tuple
 
@@ -320,3 +321,51 @@ def save_config(path: str, cfg: AppConfig) -> None:
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="财务数据分析（命令行）")
+    parser.add_argument("--config", type=str, required=True, help="配置文件路径(JSON)")
+    parser.add_argument("--tool-id", type=str, default=None, help="指定工具ID（覆盖配置中的 tool_id）")
+    parser.add_argument("--input-dir", type=str, default=None, help="输入目录")
+    parser.add_argument("--output-dir", type=str, default=None, help="输出目录")
+    parser.add_argument("--glob", type=str, default=None, help="文件匹配模式，如 *.xlsx")
+    args = parser.parse_args(argv)
+
+    cfg = load_config(args.config)
+    if args.tool_id:
+        cfg.tool_id = str(args.tool_id).strip()
+    if args.input_dir:
+        cfg.input_dir = str(args.input_dir)
+    if args.output_dir:
+        cfg.output_dir = str(args.output_dir)
+    if args.glob:
+        cfg.file_glob = str(args.glob)
+
+    logger = _get_logger(name="financial_analyzer_cli")
+    logger.info(f"tool_id={cfg.tool_id}")
+    logger.info(f"input_dir={cfg.input_dir}")
+    logger.info(f"output_dir={cfg.output_dir}")
+    logger.info(f"file_glob={cfg.file_glob}")
+
+    try:
+        result = run_tool(cfg.tool_id, cfg, logger=logger)
+    except Exception as e:
+        logger.error(str(e))
+        return 1
+
+    if getattr(result, "cleaned_path", None):
+        logger.info(f"cleaned_path={result.cleaned_path}")
+    if getattr(result, "validation_path", None):
+        logger.info(f"validation_path={result.validation_path}")
+    if getattr(result, "metrics_path", None):
+        logger.info(f"metrics_path={result.metrics_path}")
+    if getattr(result, "cleaned_sqlite_path", None):
+        logger.info(f"cleaned_sqlite_path={result.cleaned_sqlite_path}")
+
+    errors = list(getattr(result, "errors", []) or [])
+    if errors:
+        for msg in errors:
+            logger.error(msg)
+        return 1
+    return 0
