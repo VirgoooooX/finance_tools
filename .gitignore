@@ -51,9 +51,12 @@ coverage.xml
 /output/
 /data/
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.db
 清洗后的AI标准财务表*.xlsx
 *.log
+~$*.xls*
 
 # IDEs
 .vscode/
@@ -64,4 +67,6 @@ coverage.xml
 # OS
 Thumbs.db
 Desktop.ini
+.DS_Store
+/.trae
 *.xlsx
