@@ -19,8 +19,8 @@ from financial_analyzer_core import (
     OUTPUT_PATH,
     AppConfig,
     AnalysisResult,
-    DEFAULT_TOOL_ID,
     get_base_dir,
+    get_default_tool_id,
     load_config,
     save_config,
     run_tool,
@@ -87,27 +87,52 @@ class _WebRunner:
         self.current_progress: Dict[str, Any] = {"current": 0, "total": 1, "detail": ""}
         self._lock = threading.Lock()
         self._cleaned_cache: Dict[str, Any] = {"path": None, "mtime": None, "df": None}
+        self.active_tool_id: str = ""
+        self.active_run_id_by_tool: Dict[str, str] = {}
+
+    def _normalize_tool_id(self, tool_id: str = "") -> str:
+        tid = str(tool_id or "").strip()
+        if tid:
+            return tid
+        with self._lock:
+            tid = str(self.active_tool_id or "").strip()
+        if tid:
+            return tid
+        return str(get_default_tool_id() or "").strip()
 
     def set_config(self, data: Dict[str, Any], tool_id: str = "") -> AppConfig:
-        tid = str(tool_id or "").strip()
-        if not tid:
-            tid = DEFAULT_TOOL_ID
+        tid = self._normalize_tool_id(tool_id)
         
         # Load specific tool config path
         # Assuming standard structure: tools/{tid}/config.json
         # If tid is default, we might have logic for legacy paths, but let's standardize on tools/
         
         from financial_analyzer_core import get_base_dir
-        config_path = os.path.join(get_base_dir(), "tools", tid, "config.json")
-        if not os.path.exists(config_path) and tid == DEFAULT_TOOL_ID:
-             # Fallback to self.config_path if default
-             config_path = self.config_path
+        config_path = os.path.join(get_base_dir(), "tools", tid, "config.json") if tid else self.config_path
+        if not os.path.exists(config_path):
+            config_path = self.config_path
 
         cfg = load_config(config_path)
         # Update cfg with data
         for k, v in (data or {}).items():
+            if k == "tool_id":
+                continue
+            if k == "tool_params":
+                if isinstance(v, dict):
+                    setattr(cfg, "tool_params", v)
+                continue
             if hasattr(cfg, k):
                 setattr(cfg, k, v)
+                continue
+            tp = getattr(cfg, "tool_params", None)
+            if not isinstance(tp, dict):
+                cfg.tool_params = {}
+                tp = cfg.tool_params
+            bucket = tp.get(tid)
+            if not isinstance(bucket, dict):
+                bucket = {}
+            bucket[k] = v
+            tp[tid] = bucket
         
         # Ensure critical defaults
         if not getattr(cfg, "input_dir", None):
@@ -145,14 +170,12 @@ class _WebRunner:
         return cfg
 
     def get_config(self, tool_id: str = "") -> AppConfig:
-        tid = str(tool_id or "").strip()
-        if not tid:
-            tid = DEFAULT_TOOL_ID
+        tid = self._normalize_tool_id(tool_id)
             
         from financial_analyzer_core import get_base_dir
-        config_path = os.path.join(get_base_dir(), "tools", tid, "config.json")
-        if not os.path.exists(config_path) and tid == DEFAULT_TOOL_ID:
-             config_path = self.config_path
+        config_path = os.path.join(get_base_dir(), "tools", tid, "config.json") if tid else self.config_path
+        if not os.path.exists(config_path):
+            config_path = self.config_path
              
         return load_config(config_path)
 
@@ -164,7 +187,7 @@ class _WebRunner:
     def start(self, tool_id: str = "") -> bool:
         requested_tid = str(tool_id or "").strip()
         if not requested_tid:
-            requested_tid = str(getattr(self.get_config(), "tool_id", "") or "").strip() or DEFAULT_TOOL_ID
+            requested_tid = self._normalize_tool_id("")
         tid, used_default = resolve_tool_id(requested_tid)
         with self._lock:
             if self.worker_thread and self.worker_thread.is_alive():
@@ -173,6 +196,7 @@ class _WebRunner:
             self.running = True
             self.last_result = None
             self.current_progress = {"current": 0, "total": 1, "detail": ""}
+            self.active_tool_id = tid
 
         handler = _WebQueueLogHandler(self.hub)
         logger = _get_logger(handler=handler)
@@ -184,18 +208,24 @@ class _WebRunner:
 
         def worker() -> None:
             try:
-                cfg = self.get_config()
+                cfg = self.get_config(tool_id=tid)
                 res = run_tool(tid, cfg, logger=logger, progress_cb=progress_cb, cancel_event=self.cancel_event)
             except Exception as e:
                 res = AnalysisResult(errors=[str(e)])
             with self._lock:
                 self.last_result = res
                 self.running = False
+                try:
+                    rid = str(getattr(res, "run_id", "") or "").strip()
+                    if rid:
+                        self.active_run_id_by_tool[tid] = rid
+                except Exception:
+                    pass
             self.hub.publish({"type": "done", "tool_id": tid, "result": asdict(res)})
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
-        if used_default and str(requested_tid or "").strip() and tid == DEFAULT_TOOL_ID and requested_tid != DEFAULT_TOOL_ID:
+        if used_default and str(requested_tid or "").strip() and requested_tid != tid:
             self.hub.publish({"type": "status", "message": f"未找到工具：{requested_tid}，已回退到默认工具：{tid}"})
         self.hub.publish({"type": "status", "message": "已开始运行"})
         return True
@@ -213,13 +243,35 @@ class _WebRunner:
                 "result": res,
             }
 
-    def _get_cleaned_path(self) -> str:
+    def _get_cleaned_path(self, tool_id: str = "", run_id: str = "") -> str:
         with self._lock:
             res = self.last_result
-            cfg = self.cfg
-        if res and getattr(res, "cleaned_path", None):
+        tid = self._normalize_tool_id(tool_id)
+        if res and getattr(res, "cleaned_path", None) and (not tid or str(getattr(res, "tool_id", "") or "").strip() in ("", tid)):
             return str(res.cleaned_path or "")
 
+        rid = str(run_id or "").strip()
+        if not rid:
+            with self._lock:
+                rid = str(self.active_run_id_by_tool.get(tid, "") or "").strip()
+        if tid and rid:
+            try:
+                from fa_platform.run_index import get_run
+                info = get_run(tid, rid)
+                if info and info.get("cleaned_path"):
+                    return str(info.get("cleaned_path") or "")
+            except Exception:
+                pass
+        if tid and not rid:
+            try:
+                from fa_platform.run_index import get_latest_run
+                info = get_latest_run(tid)
+                if info and info.get("cleaned_path"):
+                    return str(info.get("cleaned_path") or "")
+            except Exception:
+                pass
+
+        cfg = self.get_config(tool_id=tid)
         base_dir = os.path.abspath(get_base_dir())
         out_dir = str(cfg.output_dir or "").strip() or "output"
         output_root = os.path.abspath(out_dir) if os.path.isabs(out_dir) else os.path.abspath(os.path.join(base_dir, out_dir))
@@ -232,7 +284,7 @@ class _WebRunner:
             
         # Try to find tool subdirectory if exists
         # Assuming tool_id is in config or default
-        tid = str(getattr(cfg, "tool_id", "") or "monthly_report_cleaner").strip()
+        tid = str(getattr(cfg, "tool_id", "") or tid or "").strip()
         
         # Paths to search:
         # 1. output_root/{timestamp} (Legacy)
@@ -265,18 +317,34 @@ class _WebRunner:
 
         return direct
 
-    def _get_cleaned_sqlite_path(self) -> str:
+    def _get_cleaned_sqlite_path(self, tool_id: str = "", run_id: str = "") -> str:
         with self._lock:
             res = self.last_result
-            cfg = self.cfg
-        if res and getattr(res, "cleaned_sqlite_path", None):
+        tid = self._normalize_tool_id(tool_id)
+        if res and getattr(res, "cleaned_sqlite_path", None) and (not tid or str(getattr(res, "tool_id", "") or "").strip() in ("", tid)):
             return str(getattr(res, "cleaned_sqlite_path") or "")
 
-        xlsx_path = self._get_cleaned_path()
+        rid = str(run_id or "").strip()
+        if not rid:
+            with self._lock:
+                rid = str(self.active_run_id_by_tool.get(tid, "") or "").strip()
+        if tid and rid:
+            try:
+                from fa_platform.run_index import get_run
+                info = get_run(tid, rid)
+                if info:
+                    sp = str(info.get("cleaned_sqlite_path") or "").strip()
+                    if sp:
+                        return sp
+            except Exception:
+                pass
+
+        xlsx_path = self._get_cleaned_path(tool_id=tid, run_id=rid)
         guess = _cleaned_sqlite_path_for(xlsx_path) if xlsx_path else ""
         if guess and os.path.exists(guess):
             return guess
 
+        cfg = self.get_config(tool_id=tid)
         base_dir = os.path.abspath(get_base_dir())
         data_root = os.path.abspath(os.path.join(base_dir, "data"))
         stem = os.path.splitext(str(cfg.output_basename or OUTPUT_PATH))[0] or "cleaned"
@@ -296,11 +364,11 @@ class _WebRunner:
 
         return guess or ""
 
-    def _sqlite_is_available(self) -> bool:
-        sp = self._get_cleaned_sqlite_path()
+    def _sqlite_is_available(self, tool_id: str = "", run_id: str = "") -> bool:
+        sp = self._get_cleaned_sqlite_path(tool_id=tool_id, run_id=run_id)
         if not sp or not os.path.exists(sp):
             return False
-        xp = self._get_cleaned_path()
+        xp = self._get_cleaned_path(tool_id=tool_id, run_id=run_id)
         if not xp or not os.path.exists(xp):
             return True
         try:
@@ -308,8 +376,8 @@ class _WebRunner:
         except Exception:
             return True
 
-    def load_cleaned_df(self, force_reload: bool = False) -> pd.DataFrame:
-        path = self._get_cleaned_path()
+    def load_cleaned_df(self, tool_id: str = "", run_id: str = "", force_reload: bool = False) -> pd.DataFrame:
+        path = self._get_cleaned_path(tool_id=tool_id, run_id=run_id)
         if not path or not os.path.exists(path):
             raise FileNotFoundError("清洗后的AI标准财务表不存在，请先运行生成")
 
@@ -363,14 +431,33 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.get("/api/config")
     def api_get_config(tool_id: str = "") -> Dict[str, Any]:
-        return asdict(runner.get_config(tool_id=tool_id))
+        tid = runner._normalize_tool_id(tool_id)
+        cfg = runner.get_config(tool_id=tool_id)
+        d = asdict(cfg)
+        tp = d.get("tool_params")
+        if isinstance(tp, dict):
+            bucket = tp.get(tid)
+            if isinstance(bucket, dict):
+                for k, v in bucket.items():
+                    if k not in d:
+                        d[k] = v
+        return sanitize_json(d)
 
     @app.post("/api/config")
     def api_set_config(data: Dict[str, Any], tool_id: str = "") -> Dict[str, Any]:
         # tool_id can be in query param or body, let's prefer query param for consistency
         # but fastAPI handles query param automatically if defined in args.
         cfg = runner.set_config(data, tool_id=tool_id)
-        return asdict(cfg)
+        tid = runner._normalize_tool_id(tool_id)
+        d = asdict(cfg)
+        tp = d.get("tool_params")
+        if isinstance(tp, dict):
+            bucket = tp.get(tid)
+            if isinstance(bucket, dict):
+                for k, v in bucket.items():
+                    if k not in d:
+                        d[k] = v
+        return sanitize_json(d)
 
     @app.get("/api/config/queries")
     def api_get_saved_queries(tool_id: str = "") -> Dict[str, Any]:
@@ -386,10 +473,10 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         
         # Save back
         from financial_analyzer_core import get_base_dir
-        tid = str(tool_id or DEFAULT_TOOL_ID).strip()
+        tid = runner._normalize_tool_id(tool_id)
         config_path = os.path.join(get_base_dir(), "tools", tid, "config.json")
-        if not os.path.exists(config_path) and tid == DEFAULT_TOOL_ID:
-             config_path = runner.config_path
+        if not os.path.exists(config_path):
+            config_path = runner.config_path
         
         save_config(config_path, cfg)
         return {"status": "ok", "saved_queries": cfg.saved_queries}
@@ -402,9 +489,9 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             del sq[name]
             
             from financial_analyzer_core import get_base_dir
-            tid = str(tool_id or DEFAULT_TOOL_ID).strip()
+            tid = runner._normalize_tool_id(tool_id)
             config_path = os.path.join(get_base_dir(), "tools", tid, "config.json")
-            if not os.path.exists(config_path) and tid == DEFAULT_TOOL_ID:
+            if not os.path.exists(config_path):
                 config_path = runner.config_path
                 
             save_config(config_path, cfg)
@@ -414,13 +501,12 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     def api_get_rules(tool_id: str = "") -> Dict[str, Any]:
         try:
             import financial_analyzer_core as core
-            from financial_analyzer_core import get_base_dir, DEFAULT_TOOL_ID
-            
-            tid = str(tool_id or "").strip() or DEFAULT_TOOL_ID
+            from financial_analyzer_core import get_base_dir
+            tid = runner._normalize_tool_id(tool_id)
 
             # Try to determine the path used by _load_rules, or construct it
             path = os.path.join(get_base_dir(), "tools", tid, "rules.json")
-            if not os.path.exists(path) and tid == DEFAULT_TOOL_ID:
+            if not os.path.exists(path):
                 path = os.path.join(get_base_dir(), "config", "rules.json")
             
             # Manual load to ensure we get the specific file
@@ -440,9 +526,8 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     def api_save_rules(payload: Dict[str, Any], tool_id: str = "") -> Dict[str, Any]:
         try:
             import financial_analyzer_core as core
-            from financial_analyzer_core import get_base_dir, DEFAULT_TOOL_ID
-            
-            tid = str(tool_id or "").strip() or DEFAULT_TOOL_ID
+            from financial_analyzer_core import get_base_dir
+            tid = runner._normalize_tool_id(tool_id)
 
             rules_obj: Any = payload.get("rules") if isinstance(payload, dict) and "rules" in payload else payload
             if not isinstance(rules_obj, dict):
@@ -479,7 +564,46 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.get("/api/tools")
     def api_tools() -> Dict[str, Any]:
-        return {"tools": list_tools(), "default": DEFAULT_TOOL_ID, "errors": get_tool_discovery_errors()}
+        return {"tools": list_tools(), "default": get_default_tool_id(), "errors": get_tool_discovery_errors()}
+
+    @app.post("/api/tool/select")
+    def api_tool_select(tool_id: str = "") -> Dict[str, Any]:
+        tid, _ = resolve_tool_id(tool_id)
+        with runner._lock:
+            runner.active_tool_id = tid
+        return {"ok": True, "tool_id": tid}
+
+    @app.get("/api/runs")
+    def api_runs(tool_id: str = "", limit: int = 50) -> Dict[str, Any]:
+        from fa_platform.run_index import list_runs
+        tid = runner._normalize_tool_id(tool_id)
+        return sanitize_json({"ok": True, "tool_id": tid, "runs": list_runs(tid, limit=limit)})
+
+    @app.get("/api/run/active")
+    def api_run_active(tool_id: str = "") -> Dict[str, Any]:
+        from fa_platform.run_index import get_latest_run, get_run
+        tid = runner._normalize_tool_id(tool_id)
+        with runner._lock:
+            rid = str(runner.active_run_id_by_tool.get(tid, "") or "").strip()
+        info = get_run(tid, rid) if tid and rid else None
+        if info is None and tid:
+            info = get_latest_run(tid)
+            if info:
+                with runner._lock:
+                    runner.active_run_id_by_tool[tid] = str(info.get("run_id") or "").strip()
+        return sanitize_json({"ok": True, "tool_id": tid, "run": info})
+
+    @app.post("/api/run/select")
+    def api_run_select(tool_id: str = "", run_id: str = "") -> Dict[str, Any]:
+        from fa_platform.run_index import get_run
+        tid = runner._normalize_tool_id(tool_id)
+        rid = str(run_id or "").strip()
+        info = get_run(tid, rid) if tid and rid else None
+        if info:
+            with runner._lock:
+                runner.active_run_id_by_tool[tid] = rid
+            return {"ok": True, "tool_id": tid, "run_id": rid}
+        return {"ok": False, "tool_id": tid, "run_id": rid, "message": "未找到该运行记录"}
 
     @app.get("/api/tools/{tool_id}/web")
     def api_tool_web(tool_id: str) -> Dict[str, Any]:
@@ -555,14 +679,25 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         return runner.get_status()
 
     @app.get("/api/cleaned/options")
-    def api_cleaned_options(force: int = 0) -> Dict[str, Any]:
-        if runner._sqlite_is_available() and not bool(int(force or 0)):
-            sp = runner._get_cleaned_sqlite_path()
+    def api_cleaned_options(tool_id: str = "", run_id: str = "", force: int = 0) -> Dict[str, Any]:
+        tid = runner._normalize_tool_id(tool_id)
+        rid = str(run_id or "").strip()
+        if runner._sqlite_is_available(tool_id=tid, run_id=rid) and not bool(int(force or 0)):
+            sp = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
             try:
                 conn = sqlite3.connect(sp, check_same_thread=False)
                 try:
-                    opts: Dict[str, Any] = {"ok": True}
+                    cols: List[str] = []
+                    try:
+                        cur = conn.execute("PRAGMA table_info(cleaned)")
+                        cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
+                    except Exception:
+                        cols = []
+
+                    opts: Dict[str, Any] = {"ok": True, "tool_id": tid, "run_id": rid, "columns": cols}
                     for col in ["源文件", "日期", "报表类型", "大类", "时间属性"]:
+                        if cols and col not in cols:
+                            continue
                         try:
                             cur = conn.execute(
                                 f'SELECT DISTINCT "{col}" FROM cleaned WHERE "{col}" IS NOT NULL AND TRIM(CAST("{col}" AS TEXT)) <> \'\' ORDER BY "{col}" LIMIT 500'
@@ -577,7 +712,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                         opts["rows"] = int(row[0]) if row else 0
                     except Exception:
                         opts["rows"] = 0
-                    opts["path"] = runner._get_cleaned_path()
+                    opts["path"] = runner._get_cleaned_path(tool_id=tid, run_id=rid)
                     opts["sqlite"] = sp
                     return sanitize_json(opts)
                 finally:
@@ -588,11 +723,11 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             except Exception:
                 pass
         try:
-            df = runner.load_cleaned_df(force_reload=bool(int(force or 0)))
+            df = runner.load_cleaned_df(tool_id=tid, run_id=rid, force_reload=bool(int(force or 0)))
         except Exception as e:
-            return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(), "rows": 0}
+            return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(tool_id=tid, run_id=rid), "rows": 0, "tool_id": tid, "run_id": rid}
 
-        opts: Dict[str, Any] = {"ok": True}
+        opts: Dict[str, Any] = {"ok": True, "tool_id": tid, "run_id": rid, "columns": [str(c) for c in df.columns]}
         for col in ["源文件", "日期", "报表类型", "大类", "时间属性"]:
             if col in df.columns:
                 try:
@@ -602,12 +737,14 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                 vals = [v for v in vals if str(v).strip() != ""]
                 vals.sort()
                 opts[col] = vals[:500]
-        opts["path"] = runner._get_cleaned_path()
+        opts["path"] = runner._get_cleaned_path(tool_id=tid, run_id=rid)
         opts["rows"] = int(len(df))
         return sanitize_json(opts)
 
     @app.get("/api/validation/query")
     def api_validation_query(
+        tool_id: str = "",
+        run_id: str = "",
         min_diff: Optional[float] = None,
         max_diff: Optional[float] = None,
         source_file: str = "",
@@ -615,10 +752,9 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         limit: int = 200,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        if not runner.last_result or not runner.last_result.cleaned_sqlite_path:
-            return {"status": "error", "message": "No database available"}
-        
-        db_path = runner.last_result.cleaned_sqlite_path
+        tid = runner._normalize_tool_id(tool_id)
+        rid = str(run_id or "").strip()
+        db_path = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
         if not os.path.exists(db_path):
             return {"status": "error", "message": "Database file not found"}
 
@@ -672,11 +808,10 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
 
     @app.get("/api/validation/summary")
-    def api_validation_summary() -> Dict[str, Any]:
-        if not runner.last_result or not runner.last_result.cleaned_sqlite_path:
-            return {"status": "error", "message": "No database available"}
-        
-        db_path = runner.last_result.cleaned_sqlite_path
+    def api_validation_summary(tool_id: str = "", run_id: str = "") -> Dict[str, Any]:
+        tid = runner._normalize_tool_id(tool_id)
+        rid = str(run_id or "").strip()
+        db_path = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
         if not os.path.exists(db_path):
             return {"status": "error", "message": "Database file not found"}
 
@@ -711,6 +846,8 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.get("/api/cleaned/query")
     def api_cleaned_query(
+        tool_id: str = "",
+        run_id: str = "",
         q: str = "",
         subject: str = "",
         source_file: str = "",
@@ -727,12 +864,20 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         offset: int = 0,
         group_by: str = "",
     ) -> Dict[str, Any]:
-        allowed_cols = {"源文件", "日期", "报表类型", "大类", "科目", "时间属性", "金额", "来源Sheet"}
-        if runner._sqlite_is_available():
-            sp = runner._get_cleaned_sqlite_path()
+        tid = runner._normalize_tool_id(tool_id)
+        rid = str(run_id or "").strip()
+        if runner._sqlite_is_available(tool_id=tid, run_id=rid):
+            sp = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
             try:
                 conn = sqlite3.connect(sp, check_same_thread=False)
                 try:
+                    cols: List[str] = []
+                    try:
+                        cur = conn.execute("PRAGMA table_info(cleaned)")
+                        cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
+                    except Exception:
+                        cols = []
+                    allowed_cols = set(cols) if cols else {"源文件", "日期", "报表类型", "大类", "科目", "时间属性", "金额", "来源Sheet"}
                     where: List[str] = []
                     params: List[Any] = []
 
@@ -752,7 +897,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                     add_eq("时间属性", time_attr)
 
                     kw_input = (subject or q or "").strip()
-                    if kw_input:
+                    if kw_input and ("科目" in allowed_cols):
                         import re
                         keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
                         if keywords:
@@ -765,14 +910,16 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
                     if min_amount is not None:
                         try:
-                            where.append('"金额" >= ?')
-                            params.append(float(min_amount))
+                            if "金额" in allowed_cols:
+                                where.append('"金额" >= ?')
+                                params.append(float(min_amount))
                         except Exception:
                             pass
                     if max_amount is not None:
                         try:
-                            where.append('"金额" <= ?')
-                            params.append(float(max_amount))
+                            if "金额" in allowed_cols:
+                                where.append('"金额" <= ?')
+                                params.append(float(max_amount))
                         except Exception:
                             pass
 
@@ -831,7 +978,9 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                     return sanitize_json(
                         {
                             "ok": True,
-                            "path": runner._get_cleaned_path(),
+                            "tool_id": tid,
+                            "run_id": rid,
+                            "path": runner._get_cleaned_path(tool_id=tid, run_id=rid),
                             "sqlite": sp,
                             "total": int(total),
                             "limit": lim,
@@ -847,11 +996,11 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                     except Exception:
                         pass
             except Exception as e:
-                return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(), "total": 0, "limit": 0, "offset": 0, "rows": []}
+                return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(tool_id=tid, run_id=rid), "tool_id": tid, "run_id": rid, "total": 0, "limit": 0, "offset": 0, "rows": []}
         try:
-            df = runner.load_cleaned_df(force_reload=False)
+            df = runner.load_cleaned_df(tool_id=tid, run_id=rid, force_reload=False)
         except Exception as e:
-            return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(), "total": 0, "limit": 0, "offset": 0, "rows": []}
+            return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(tool_id=tid, run_id=rid), "tool_id": tid, "run_id": rid, "total": 0, "limit": 0, "offset": 0, "rows": []}
         view = df
 
         def _filt_eq(col: str, val: str) -> None:
@@ -926,7 +1075,9 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         records = page.to_dict(orient="records")
         return sanitize_json({
             "ok": True,
-            "path": runner._get_cleaned_path(),
+            "tool_id": tid,
+            "run_id": rid,
+            "path": runner._get_cleaned_path(tool_id=tid, run_id=rid),
             "total": total,
             "limit": lim,
             "offset": off,
@@ -937,6 +1088,8 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.get("/api/cleaned/export")
     def api_cleaned_export(
+        tool_id: str = "",
+        run_id: str = "",
         q: str = "",
         subject: str = "",
         source_file: str = "",
@@ -958,13 +1111,21 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if is_xlsx else "text/csv"
         filename = f"cleaned_export.{ext}"
 
-        allowed_cols = {"源文件", "日期", "报表类型", "大类", "科目", "时间属性", "金额", "来源Sheet"}
+        tid = runner._normalize_tool_id(tool_id)
+        rid = str(run_id or "").strip()
 
-        if runner._sqlite_is_available():
-            sp = runner._get_cleaned_sqlite_path()
+        if runner._sqlite_is_available(tool_id=tid, run_id=rid):
+            sp = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
             try:
                 conn = sqlite3.connect(sp, check_same_thread=False)
                 try:
+                    cols: List[str] = []
+                    try:
+                        cur = conn.execute("PRAGMA table_info(cleaned)")
+                        cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
+                    except Exception:
+                        cols = []
+                    allowed_cols = set(cols) if cols else {"源文件", "日期", "报表类型", "大类", "科目", "时间属性", "金额", "来源Sheet"}
                     where: List[str] = []
                     params: List[Any] = []
                     def add_eq(col: str, val: str) -> None:
@@ -981,7 +1142,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                     add_eq("大类", category)
                     add_eq("时间属性", time_attr)
                     kw_input = (subject or q or "").strip()
-                    if kw_input:
+                    if kw_input and ("科目" in allowed_cols):
                         import re
                         keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
                         if keywords:
@@ -993,14 +1154,16 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                                 where.append(f"({' OR '.join(or_clauses)})")
                     if min_amount is not None:
                         try:
-                            where.append('"金额" >= ?')
-                            params.append(float(min_amount))
+                            if "金额" in allowed_cols:
+                                where.append('"金额" >= ?')
+                                params.append(float(min_amount))
                         except Exception:
                             pass
                     if max_amount is not None:
                         try:
-                            where.append('"金额" <= ?')
-                            params.append(float(max_amount))
+                            if "金额" in allowed_cols:
+                                where.append('"金额" <= ?')
+                                params.append(float(max_amount))
                         except Exception:
                             pass
                     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
@@ -1067,7 +1230,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             except Exception as e:
                 return Response(str(e), media_type="text/plain", status_code=500)
         try:
-            df = runner.load_cleaned_df(force_reload=False)
+            df = runner.load_cleaned_df(tool_id=tid, run_id=rid, force_reload=False)
         except Exception as e:
             return Response(str(e), media_type="text/plain", status_code=500)
         view = df

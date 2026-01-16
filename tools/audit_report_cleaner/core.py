@@ -4,11 +4,11 @@ import logging
 import pandas as pd
 import threading
 import sqlite3
-import hashlib
 from typing import Optional, Dict, List, Any, Callable
 from dataclasses import asdict
 
 from financial_analyzer_core import AppConfig, AnalysisResult, ProgressCallback
+from financial_analyzer_core import _cleaned_sqlite_path_for as _cleaned_sqlite_path_for_common
 from fa_platform.paths import (
     ensure_dir as _ensure_dir_common,
     default_output_root as _default_output_root_common,
@@ -17,8 +17,11 @@ from fa_platform.paths import (
     get_base_dir as _get_base_dir_common,
 )
 from fa_platform.jsonx import sanitize_json
+from fa_platform.pipeline import build_artifacts as _build_artifacts_common, build_run_dir as _build_run_dir_common, write_sqlite_tables as _write_sqlite_tables_common
 
 # --- Helpers ---
+
+_TOOL_ID = os.path.basename(os.path.dirname(__file__))
 
 def _ensure_dir(path: str) -> None:
     _ensure_dir_common(path)
@@ -53,49 +56,10 @@ def _run_timestamp() -> str:
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 def _cleaned_sqlite_path_for(cleaned_path: str) -> str:
-    name = os.path.basename(str(cleaned_path or "")).strip()
-    if not name:
-        base_name = "cleaned"
-    else:
-        base_name, _ = os.path.splitext(name)
-        base_name = base_name or "cleaned"
-
-    ts = ""
-    try:
-        parent = os.path.basename(os.path.dirname(str(cleaned_path or "")))
-        if _is_timestamp_folder(parent):
-            ts = parent
-    except Exception:
-        ts = ""
-
-    filename = f"{base_name}_{ts}.sqlite" if ts else f"{base_name}.sqlite"
-    return os.path.abspath(os.path.join(_default_data_root(), filename))
+    return _cleaned_sqlite_path_for_common(cleaned_path)
 
 def _write_cleaned_sqlite(df: pd.DataFrame, sqlite_path: str) -> None:
-    def _make_index_name(prefix: str, col: str) -> str:
-        safe = re.sub(r"[^0-9a-zA-Z_]+", "_", str(col)).strip("_")
-        digest = hashlib.sha1(str(col).encode("utf-8")).hexdigest()[:12]
-        if safe:
-            return f"{prefix}_{safe}_{digest}"
-        return f"{prefix}_{digest}"
-
-    _ensure_dir(os.path.dirname(sqlite_path) or os.getcwd())
-    conn = sqlite3.connect(sqlite_path)
-    try:
-        df2 = df.copy()
-        if "金额" in df2.columns:
-            df2["金额"] = pd.to_numeric(df2["金额"], errors="coerce").fillna(0.0)
-        df2.to_sql("cleaned", conn, if_exists="replace", index=False, chunksize=2000)
-        for col in ["源文件", "日期", "报表类型", "大类", "时间属性", "科目", "金额"]:
-            if col in df2.columns:
-                idx_name = _make_index_name("idx_cleaned", col)
-                conn.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON cleaned("{col}")')
-        conn.commit()
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _write_sqlite_tables_common(sqlite_path, df)
 
 def _list_excel_files(cfg: AppConfig) -> List[str]:
     import glob
@@ -109,6 +73,22 @@ def _list_excel_files(cfg: AppConfig) -> List[str]:
         files = [p for p in files if os.path.abspath(p) not in exclude and not os.path.basename(p).startswith("~$")]
     files.sort(key=lambda p: p.lower())
     return files
+
+def _tool_params(cfg: AppConfig) -> Dict[str, Any]:
+    tp = getattr(cfg, "tool_params", None)
+    if not isinstance(tp, dict):
+        return {}
+    bucket = tp.get(_TOOL_ID)
+    return bucket if isinstance(bucket, dict) else {}
+
+def _get_param(cfg: AppConfig, key: str, default: Any) -> Any:
+    params = _tool_params(cfg)
+    if key in params:
+        return params.get(key)
+    if hasattr(cfg, key):
+        v = getattr(cfg, key)
+        return default if v is None else v
+    return default
 
 # --- Audit Cleaning Logic ---
 
@@ -127,9 +107,9 @@ def get_report_type(sheet_name, cfg: AppConfig):
         return str(p or "").upper() in name if p else False
 
     try:
-        if _match(getattr(cfg, "sheet_keyword_bs", None)): return "资产负债表"
-        if _match(getattr(cfg, "sheet_keyword_pl", None)): return "利润表"
-        if _match(getattr(cfg, "sheet_keyword_cf", None)): return "现金流量表"
+        if _match(_get_param(cfg, "sheet_keyword_bs", ["BS", "资产", "01"])): return "资产负债表"
+        if _match(_get_param(cfg, "sheet_keyword_pl", ["PL", "利润", "损益", "02"])): return "利润表"
+        if _match(_get_param(cfg, "sheet_keyword_cf", ["CF", "现金", "03"])): return "现金流量表"
     except Exception:
         pass
 
@@ -173,9 +153,9 @@ def process_sheet(filename, file_date, sheet_name, df, cfg: AppConfig, logger=No
     if rpt_type == "其他报表": return []
     
     # Get column keywords from config or use defaults
-    kw_subject = getattr(cfg, "col_keyword_subject", None) or ["资产", "项目", "科目", "摘要"]
-    kw_curr = getattr(cfg, "col_keyword_period_end", None) or ["期末", "本期", "本年", "金额"]
-    kw_prev = getattr(cfg, "col_keyword_period_start", None) or ["上年", "上期", "年初"]
+    kw_subject = _get_param(cfg, "col_keyword_subject", ["资产", "项目", "科目", "摘要"]) or ["资产", "项目", "科目", "摘要"]
+    kw_curr = _get_param(cfg, "col_keyword_period_end", ["期末", "本期", "本年", "金额"]) or ["期末", "本期", "本年", "金额"]
+    kw_prev = _get_param(cfg, "col_keyword_period_start", ["上年", "上期", "年初"]) or ["上年", "上期", "年初"]
     if isinstance(kw_subject, str): kw_subject = [x.strip() for x in kw_subject.split(",")]
     if isinstance(kw_curr, str): kw_curr = [x.strip() for x in kw_curr.split(",")]
     if isinstance(kw_prev, str): kw_prev = [x.strip() for x in kw_prev.split(",")]
@@ -183,11 +163,11 @@ def process_sheet(filename, file_date, sheet_name, df, cfg: AppConfig, logger=No
     header_idx = None
     try:
         if rpt_type == "资产负债表":
-            header_idx = _find_header_row(df, str(getattr(cfg, "header_keyword_bs", "") or ""))
+            header_idx = _find_header_row(df, str(_get_param(cfg, "header_keyword_bs", "") or ""))
         elif rpt_type == "利润表":
-            header_idx = _find_header_row(df, str(getattr(cfg, "header_keyword_pl", "") or ""))
+            header_idx = _find_header_row(df, str(_get_param(cfg, "header_keyword_pl", "") or ""))
         elif rpt_type == "现金流量表":
-            header_idx = _find_header_row(df, str(getattr(cfg, "header_keyword_cf", "") or ""))
+            header_idx = _find_header_row(df, str(_get_param(cfg, "header_keyword_cf", "") or ""))
     except Exception:
         header_idx = None
     if header_idx is None:
@@ -306,7 +286,7 @@ def run_analysis(
     if not tool_id or tool_id == "monthly_report_cleaner":
         tool_id = derived_id
         
-    run_dir = os.path.join(output_root, tool_id, stamp)
+    _, run_dir = _build_run_dir_common(output_root_raw, tool_id, stamp=stamp)
     
     _ensure_dir(run_dir)
     _ensure_dir(_default_data_root())
@@ -365,5 +345,10 @@ def run_analysis(
     result.cleaned_sqlite_path = cleaned_sqlite_path
     _write_cleaned_sqlite(all_data, cleaned_sqlite_path)
     
-    result.artifacts = [{"name": "清洗结果", "path": cleaned_path, "kind": "xlsx"}]
+    result.artifacts = _build_artifacts_common(
+        cleaned_path=str(result.cleaned_path or ""),
+        cleaned_sqlite_path=str(result.cleaned_sqlite_path or ""),
+        validation_path=str(result.validation_path or ""),
+        metrics_path=str(result.metrics_path or ""),
+    )
     return result

@@ -12,6 +12,7 @@ from typing import Callable, Optional, Any, Dict, List, Tuple
 from dataclasses import asdict
 
 from financial_analyzer_core import AppConfig, AnalysisResult, ProgressCallback
+from financial_analyzer_core import _cleaned_sqlite_path_for as _cleaned_sqlite_path_for_common
 from fa_platform.paths import (
     ensure_dir as _ensure_dir_common,
     default_output_root as _default_output_root_common,
@@ -20,8 +21,11 @@ from fa_platform.paths import (
     get_base_dir as _get_base_dir_common,
 )
 from fa_platform.jsonx import sanitize_json
+from fa_platform.pipeline import build_artifacts as _build_artifacts_common, build_run_dir as _build_run_dir_common, write_sqlite_tables as _write_sqlite_tables_common
 
 # --- Helpers ---
+
+_TOOL_ID = os.path.basename(os.path.dirname(__file__))
 
 def _ensure_dir(path: str) -> None:
     _ensure_dir_common(path)
@@ -50,6 +54,35 @@ def _get_logger(name: str = "monthly_report_cleaner") -> logging.Logger:
 def _json_safe_value(v: Any) -> Any:
     return sanitize_json(v)
 
+_LEGACY_TOP_LEVEL_TOOL_PARAM_KEYS = (
+    "sheet_keyword_bs",
+    "sheet_keyword_pl",
+    "sheet_keyword_cf",
+    "header_keyword_bs",
+    "header_keyword_pl",
+    "header_keyword_cf",
+    "date_cells_bs",
+    "date_cells_pl",
+    "date_cells_cf",
+    "validation_tolerance",
+)
+
+def _tool_params(cfg: AppConfig) -> Dict[str, Any]:
+    tp = getattr(cfg, "tool_params", None)
+    if not isinstance(tp, dict):
+        return {}
+    bucket = tp.get(_TOOL_ID)
+    return bucket if isinstance(bucket, dict) else {}
+
+def _get_param(cfg: AppConfig, key: str, default: Any) -> Any:
+    params = _tool_params(cfg)
+    if key in params:
+        return params.get(key)
+    if hasattr(cfg, key):
+        v = getattr(cfg, key)
+        return default if v is None else v
+    return default
+
 # --- Config & Rules Loading ---
 
 def _rules_path() -> str:
@@ -74,9 +107,25 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         cfg = AppConfig()
-        for k, v in data.items():
-            if hasattr(cfg, k):
-                setattr(cfg, k, v)
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if hasattr(cfg, k):
+                    setattr(cfg, k, v)
+
+            tid = str(data.get("tool_id") or _TOOL_ID).strip()
+            tp = getattr(cfg, "tool_params", None)
+            if not isinstance(tp, dict):
+                cfg.tool_params = {}
+                tp = cfg.tool_params
+            bucket = tp.get(tid)
+            if not isinstance(bucket, dict):
+                bucket = {}
+            merged = dict(bucket)
+            for k in _LEGACY_TOP_LEVEL_TOOL_PARAM_KEYS:
+                if k in data and k not in merged:
+                    merged[k] = data.get(k)
+            tp[tid] = merged
+            cfg.tool_id = tid
         return cfg
     except Exception:
         return AppConfig()
@@ -162,23 +211,7 @@ def _safe_int_pair(pair: Any) -> Optional[Tuple[int, int]]:
         return None
 
 def _cleaned_sqlite_path_for(cleaned_path: str) -> str:
-    name = os.path.basename(str(cleaned_path or "")).strip()
-    if not name:
-        base_name = "cleaned"
-    else:
-        base_name, _ = os.path.splitext(name)
-        base_name = base_name or "cleaned"
-
-    ts = ""
-    try:
-        parent = os.path.basename(os.path.dirname(str(cleaned_path or "")))
-        if _is_timestamp_folder(parent):
-            ts = parent
-    except Exception:
-        ts = ""
-
-    filename = f"{base_name}_{ts}.sqlite" if ts else f"{base_name}.sqlite"
-    return os.path.abspath(os.path.join(_default_data_root(), filename))
+    return _cleaned_sqlite_path_for_common(cleaned_path)
 
 def _write_cleaned_sqlite(
     df: pd.DataFrame,
@@ -186,48 +219,7 @@ def _write_cleaned_sqlite(
     df_validation: Optional[pd.DataFrame] = None,
     df_metrics: Optional[pd.DataFrame] = None,
 ) -> None:
-    def _make_index_name(prefix: str, col: str) -> str:
-        safe = re.sub(r"[^0-9a-zA-Z_]+", "_", str(col)).strip("_")
-        digest = hashlib.sha1(str(col).encode("utf-8")).hexdigest()[:12]
-        if safe:
-            return f"{prefix}_{safe}_{digest}"
-        return f"{prefix}_{digest}"
-
-    _ensure_dir(os.path.dirname(sqlite_path) or os.getcwd())
-    conn = sqlite3.connect(sqlite_path)
-    try:
-        df2 = df.copy()
-        if "金额" in df2.columns:
-            df2["金额"] = pd.to_numeric(df2["金额"], errors="coerce").fillna(0.0)
-        df2.to_sql("cleaned", conn, if_exists="replace", index=False, chunksize=2000)
-        for col in ["源文件", "日期", "报表类型", "大类", "时间属性", "科目", "金额"]:
-            if col in df2.columns:
-                idx_name = _make_index_name("idx_cleaned", col)
-                conn.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON cleaned("{col}")')
-
-        if df_validation is not None and isinstance(df_validation, pd.DataFrame) and not df_validation.empty:
-            vdf = df_validation.copy()
-            if "差额" in vdf.columns:
-                vdf["差额"] = pd.to_numeric(vdf["差额"], errors="coerce")
-            vdf.to_sql("validation", conn, if_exists="replace", index=False, chunksize=2000)
-            for col in ["源文件", "日期", "是否平衡", "验证项目", "时间属性", "差额", "来源Sheet"]:
-                if col in vdf.columns:
-                    idx_name = _make_index_name("idx_validation", col)
-                    conn.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON validation("{col}")')
-
-        if df_metrics is not None and isinstance(df_metrics, pd.DataFrame) and not df_metrics.empty:
-            mdf = df_metrics.copy()
-            mdf.to_sql("metrics", conn, if_exists="replace", index=False, chunksize=2000)
-            for col in ["源文件", "日期"]:
-                if col in mdf.columns:
-                    idx_name = _make_index_name("idx_metrics", col)
-                    conn.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON metrics("{col}")')
-        conn.commit()
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _write_sqlite_tables_common(sqlite_path, df, validation=df_validation, metrics=df_metrics)
 
 def _df_preview_records(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
     if df is None or df.empty:
@@ -335,10 +327,11 @@ def clean_bs(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
     if logger: logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-        date_val = _read_date_from_cells(df, cfg.date_cells_bs)
+        date_val = _read_date_from_cells(df, _get_param(cfg, "date_cells_bs", [[2, 3], [2, 2]]))
         report_date = clean_date_str(date_val)
-        header_row = _find_header_row(df, cfg.header_keyword_bs)
-        if header_row is None: raise ValueError(f"未找到表头关键字: {cfg.header_keyword_bs}")
+        header_kw = str(_get_param(cfg, "header_keyword_bs", "期末余额") or "期末余额")
+        header_row = _find_header_row(df, header_kw)
+        if header_row is None: raise ValueError(f"未找到表头关键字: {header_kw}")
         df_left = df.iloc[header_row + 1 :, [0, 1, 2]].copy()
         df_left.columns = ["科目", "年初余额", "期末余额"]
         df_left["大类"] = "资产"
@@ -364,10 +357,11 @@ def clean_pl(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
     if logger: logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-        date_val = _read_date_from_cells(df, cfg.date_cells_pl)
+        date_val = _read_date_from_cells(df, _get_param(cfg, "date_cells_pl", [[2, 2], [2, 1]]))
         report_date = clean_date_str(date_val)
-        header_row = _find_header_row(df, cfg.header_keyword_pl)
-        if header_row is None: raise ValueError(f"未找到表头关键字: {cfg.header_keyword_pl}")
+        header_kw = str(_get_param(cfg, "header_keyword_pl", "本年累计") or "本年累计")
+        header_row = _find_header_row(df, header_kw)
+        if header_row is None: raise ValueError(f"未找到表头关键字: {header_kw}")
         df_clean = df.iloc[header_row + 1 :, [0, 2, 3]].copy()
         df_clean.columns = ["科目", "本期金额", "本年累计金额"]
         df_clean = df_clean.dropna(subset=["科目"])
@@ -386,10 +380,11 @@ def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
     if logger: logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-        date_val = _read_date_from_cells(df, cfg.date_cells_cf)
+        date_val = _read_date_from_cells(df, _get_param(cfg, "date_cells_cf", [[2, 4], [2, 0]]))
         report_date = clean_date_str(date_val)
-        header_row = _find_header_row(df, cfg.header_keyword_cf)
-        if header_row is None: raise ValueError(f"未找到表头关键字: {cfg.header_keyword_cf}")
+        header_kw = str(_get_param(cfg, "header_keyword_cf", "本期金额") or "本期金额")
+        header_row = _find_header_row(df, header_kw)
+        if header_row is None: raise ValueError(f"未找到表头关键字: {header_kw}")
         df_left = df.iloc[header_row + 1 :, [0, 2, 3]].copy()
         df_left.columns = ["科目", "本期金额", "本年累计金额"]
         if df.shape[1] >= 8:
@@ -544,7 +539,7 @@ def run_analysis(
     
     stamp = _run_timestamp()
     tool_id = str(getattr(cfg, "tool_id", "")).strip() or os.path.basename(os.path.dirname(__file__))
-    run_dir = os.path.join(output_root, tool_id, stamp)
+    _, run_dir = _build_run_dir_common(output_root_raw, tool_id, stamp=stamp)
     
     _ensure_dir(run_dir)
     _ensure_dir(_default_data_root())
@@ -572,9 +567,9 @@ def run_analysis(
                     if isinstance(p, list): return any(str(x).upper() in n.upper() for x in p if x)
                     return str(p or "").upper() in n.upper()
 
-                bs_sheets = [s for s in all_sheets if _match(s, cfg.sheet_keyword_bs)]
-                pl_sheets = [s for s in all_sheets if _match(s, cfg.sheet_keyword_pl)]
-                cf_sheets = [s for s in all_sheets if _match(s, cfg.sheet_keyword_cf)]
+                bs_sheets = [s for s in all_sheets if _match(s, _get_param(cfg, "sheet_keyword_bs", ["BS-合并"]))]
+                pl_sheets = [s for s in all_sheets if _match(s, _get_param(cfg, "sheet_keyword_pl", ["PL-合并"]))]
+                cf_sheets = [s for s in all_sheets if _match(s, _get_param(cfg, "sheet_keyword_cf", ["CF-合并"]))]
                 
                 file_sheets_data = []
                 for sheet in bs_sheets:
@@ -621,7 +616,7 @@ def run_analysis(
         for group_keys, df_group in all_data.groupby(["源文件", "日期"], dropna=False):
             if cancel_event and cancel_event.is_set(): result.cancelled = True; return result
             group_info = dict(zip(["源文件", "日期"], group_keys if isinstance(group_keys, tuple) else [group_keys]))
-            tol = float(cfg.validation_tolerance)
+            tol = float(_get_param(cfg, "validation_tolerance", 0.01) or 0.01)
             has_bs = "资产负债表" in df_group["报表类型"].values
             has_pl = "利润表" in df_group["报表类型"].values
             has_cf = "现金流量表" in df_group["报表类型"].values
@@ -671,8 +666,12 @@ def run_analysis(
         result.metrics_preview = _df_preview_records(df_metrics, limit=2000)
 
     _write_cleaned_sqlite(all_data, cleaned_sqlite_path, df_validation=df_validation, df_metrics=df_metrics)
-    result.artifacts = []
-    if result.cleaned_path: result.artifacts.append({"name": "清洗表", "path": result.cleaned_path, "kind": "xlsx"})
+    result.artifacts = _build_artifacts_common(
+        cleaned_path=str(result.cleaned_path or ""),
+        cleaned_sqlite_path=str(result.cleaned_sqlite_path or ""),
+        validation_path=str(result.validation_path or ""),
+        metrics_path=str(result.metrics_path or ""),
+    )
     return result
 
 # --- Web API Helpers (Exposed for Web Server) ---

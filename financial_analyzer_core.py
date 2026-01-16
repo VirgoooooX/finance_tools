@@ -7,6 +7,7 @@ import importlib.util
 import argparse
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Any, Dict, List, Tuple
+import datetime as _dt
 
 from fa_platform.paths import (
     ensure_dir as _ensure_dir_common,
@@ -30,26 +31,16 @@ class AppConfig:
     generate_validation: bool = True
     generate_metrics: bool = True
     exclude_output_files: bool = True
-    # Tool specific fields (Legacy, kept for compatibility with tool code)
-    sheet_keyword_bs: List[str] = field(default_factory=lambda: ["BS-合并"])
-    sheet_keyword_pl: List[str] = field(default_factory=lambda: ["PL-合并"])
-    sheet_keyword_cf: List[str] = field(default_factory=lambda: ["CF-合并"])
-    header_keyword_bs: str = "期末余额"
-    header_keyword_pl: str = "本年累计"
-    header_keyword_cf: str = "本期金额"
-    date_cells_bs: List[List[int]] = field(default_factory=lambda: [[2, 3], [2, 2]])
-    date_cells_pl: List[List[int]] = field(default_factory=lambda: [[2, 2], [2, 1]])
-    date_cells_cf: List[List[int]] = field(default_factory=lambda: [[2, 4], [2, 0]])
-    validation_tolerance: float = 0.01
-    col_keyword_subject: List[str] = field(default_factory=lambda: ["资产", "项目", "科目", "摘要"])
-    col_keyword_period_end: List[str] = field(default_factory=lambda: ["期末", "本期", "本年", "金额"])
-    col_keyword_period_start: List[str] = field(default_factory=lambda: ["上年", "上期", "年初"])
     saved_queries: Dict[str, Any] = field(default_factory=dict)
-    tool_id: str = "monthly_report_cleaner"
+    tool_id: str = ""
     tool_params: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class AnalysisResult:
+    tool_id: str = ""
+    run_id: Optional[str] = None
+    run_started_at: Optional[str] = None
+    run_finished_at: Optional[str] = None
     cancelled: bool = False
     errors: List[str] = field(default_factory=list)
     found_files: List[str] = field(default_factory=list)
@@ -76,9 +67,8 @@ class ToolSpec:
     run: ToolRunFn
     web_router: Optional[Callable[[], Any]] = None
 
-DEFAULT_TOOL_ID = "monthly_report_cleaner"
-# Default config path now points to the default tool's config
-DEFAULT_CONFIG_PATH = os.path.join(get_base_dir(), "tools", DEFAULT_TOOL_ID, "config.json")
+DEFAULT_TOOL_ID = str(os.environ.get("FA_DEFAULT_TOOL_ID", "") or "").strip()
+DEFAULT_CONFIG_PATH = os.path.join(get_base_dir(), "tools", DEFAULT_TOOL_ID, "config.json") if DEFAULT_TOOL_ID else ""
 
 _TOOL_REGISTRY: Dict[str, ToolSpec] = {}
 _TOOLS_DISCOVERED = False
@@ -147,12 +137,16 @@ def discover_tools(force: bool = False) -> None:
 
 def _ensure_builtin_tools() -> None:
     discover_tools(force=False)
-    # Note: builtin_tools.py should handle registration.
-    # We no longer hardcode default tool registration here if it's not in registry.
-    # But for safety:
-    if DEFAULT_TOOL_ID not in _TOOL_REGISTRY:
-        # Fallback? No, we expect builtin_tools.py to run.
-        pass
+
+def get_default_tool_id() -> str:
+    _ensure_builtin_tools()
+    if DEFAULT_TOOL_ID and DEFAULT_TOOL_ID in _TOOL_REGISTRY:
+        return DEFAULT_TOOL_ID
+    if not _TOOL_REGISTRY:
+        return ""
+    items = [{"id": t.id, "name": t.name} for t in _TOOL_REGISTRY.values()]
+    items.sort(key=lambda x: (str(x.get("name") or ""), str(x.get("id") or "")))
+    return str(items[0].get("id") or "").strip()
 
 def list_tools() -> List[Dict[str, str]]:
     _ensure_builtin_tools()
@@ -165,8 +159,9 @@ def get_tool(tool_id: str) -> ToolSpec:
     tid = str(tool_id or "").strip()
     if tid and tid in _TOOL_REGISTRY:
         return _TOOL_REGISTRY[tid]
-    if DEFAULT_TOOL_ID in _TOOL_REGISTRY:
-        return _TOOL_REGISTRY[DEFAULT_TOOL_ID]
+    fallback = get_default_tool_id()
+    if fallback and fallback in _TOOL_REGISTRY:
+        return _TOOL_REGISTRY[fallback]
     raise ValueError(f"Tool {tid} not found and default tool missing")
 
 def resolve_tool_id(tool_id: str) -> Tuple[str, bool]:
@@ -174,7 +169,10 @@ def resolve_tool_id(tool_id: str) -> Tuple[str, bool]:
     tid = str(tool_id or "").strip()
     if tid and tid in _TOOL_REGISTRY:
         return tid, False
-    return DEFAULT_TOOL_ID, True
+    fallback = get_default_tool_id()
+    if fallback:
+        return fallback, True
+    return tid, True
 
 def run_tool(
     tool_id: str,
@@ -183,9 +181,28 @@ def run_tool(
     progress_cb: Optional["Callable"] = None,
     cancel_event: Optional[threading.Event] = None,
 ) -> "AnalysisResult":
+    start_ts = _dt.datetime.now().isoformat(timespec="seconds")
     resolved_id, _ = resolve_tool_id(tool_id)
     tool = _TOOL_REGISTRY[resolved_id]
-    return tool.run(cfg, logger=logger, progress_cb=progress_cb, cancel_event=cancel_event)
+    res = tool.run(cfg, logger=logger, progress_cb=progress_cb, cancel_event=cancel_event)
+    try:
+        setattr(res, "tool_id", resolved_id)
+    except Exception:
+        pass
+    try:
+        setattr(res, "run_started_at", getattr(res, "run_started_at", None) or start_ts)
+    except Exception:
+        pass
+    try:
+        setattr(res, "run_finished_at", getattr(res, "run_finished_at", None) or _dt.datetime.now().isoformat(timespec="seconds"))
+    except Exception:
+        pass
+    try:
+        from fa_platform.run_index import upsert_run_from_result
+        upsert_run_from_result(resolved_id, cfg, res)
+    except Exception:
+        pass
+    return res
 
 def _get_logger(name: str = "financial_analyzer", handler: Optional[logging.Handler] = None) -> logging.Logger:
     logger = logging.getLogger(name)
@@ -241,9 +258,8 @@ def _cleaned_sqlite_path_for(cleaned_path: str) -> str:
 _RULES_CACHE: Dict[str, Any] = {"mtime": None, "data": None, "aliases": None}
 
 def _load_rules() -> Dict[str, Any]:
-    # Default to loading from the default tool's directory for now
-    # In a real multi-tool platform, this should be passed the tool ID
-    path = os.path.join(get_base_dir(), "tools", DEFAULT_TOOL_ID, "rules.json")
+    tid = get_default_tool_id()
+    path = os.path.join(get_base_dir(), "tools", tid, "rules.json") if tid else ""
     if not os.path.exists(path):
         # Fallback to old config location
         path = os.path.join(get_base_dir(), "config", "rules.json")
@@ -270,11 +286,48 @@ def _repair_mojibake_obj(obj: Any) -> Any:
 
 ProgressCallback = Callable[[str, int, int, str], None]
 
+_LEGACY_TOP_LEVEL_TOOL_PARAM_KEYS = (
+    "sheet_keyword_bs",
+    "sheet_keyword_pl",
+    "sheet_keyword_cf",
+    "header_keyword_bs",
+    "header_keyword_pl",
+    "header_keyword_cf",
+    "date_cells_bs",
+    "date_cells_pl",
+    "date_cells_cf",
+    "validation_tolerance",
+    "col_keyword_subject",
+    "col_keyword_period_end",
+    "col_keyword_period_start",
+)
+
+def _merge_legacy_tool_params(data: Dict[str, Any], cfg: AppConfig) -> None:
+    if not isinstance(data, dict):
+        return
+    tid = str(data.get("tool_id") or getattr(cfg, "tool_id", "") or "").strip()
+    if not tid:
+        return
+
+    tp = getattr(cfg, "tool_params", None)
+    if not isinstance(tp, dict):
+        cfg.tool_params = {}
+        tp = cfg.tool_params
+
+    bucket = tp.get(tid)
+    if not isinstance(bucket, dict):
+        bucket = {}
+    merged = dict(bucket)
+    for k in _LEGACY_TOP_LEVEL_TOOL_PARAM_KEYS:
+        if k in data and k not in merged:
+            merged[k] = data.get(k)
+    tp[tid] = merged
+
 # --- Config Loading ---
 def load_config(path: str) -> AppConfig:
     if not path or not os.path.exists(path):
         # Try default location if path not found
-        if path == DEFAULT_CONFIG_PATH and not os.path.exists(path):
+        if DEFAULT_CONFIG_PATH and path == DEFAULT_CONFIG_PATH and not os.path.exists(path):
             # Fallback to old location?
             old_path = os.path.join(get_base_dir(), "config", "financial_analyzer_config.json")
             if os.path.exists(old_path):
@@ -283,17 +336,28 @@ def load_config(path: str) -> AppConfig:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if isinstance(data, dict):
+            try:
+                data = _repair_mojibake_obj(data)
+            except Exception:
+                pass
         cfg = AppConfig()
-        for k, v in data.items():
-            if hasattr(cfg, k):
-                setattr(cfg, k, v)
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if hasattr(cfg, k):
+                    setattr(cfg, k, v)
+            _merge_legacy_tool_params(data, cfg)
         return cfg
     except Exception:
         return AppConfig()
 
 def save_config(path: str, cfg: AppConfig) -> None:
     if not path:
-        path = DEFAULT_CONFIG_PATH
+        tid = get_default_tool_id()
+        if tid:
+            path = os.path.join(get_base_dir(), "tools", tid, "config.json")
+        else:
+            raise ValueError("缺少配置路径且没有可用工具")
     
     # Ensure dir exists
     _ensure_dir_common(os.path.dirname(path))

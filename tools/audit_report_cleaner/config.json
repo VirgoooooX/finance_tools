@@ -6,47 +6,50 @@
   "generate_validation": false,
   "generate_metrics": false,
   "exclude_output_files": true,
-  "sheet_keyword_bs": [
-    "BS",
-    "资产",
-    "01"
-  ],
-  "sheet_keyword_pl": [
-    "PL",
-    "利润",
-    "损益",
-    "02"
-  ],
-  "sheet_keyword_cf": [
-    "CF",
-    "现金",
-    "03"
-  ],
-  "header_keyword_bs": "",
-  "header_keyword_pl": "",
-  "header_keyword_cf": "",
-  "date_cells_bs": [],
-  "date_cells_pl": [],
-  "date_cells_cf": [],
-  "validation_tolerance": 0.01,
-  "col_keyword_subject": [
-    "资产",
-    "项目",
-    "科目",
-    "摘要"
-  ],
-  "col_keyword_period_end": [
-    "期末",
-    "本期",
-    "本年",
-    "金额"
-  ],
-  "col_keyword_period_start": [
-    "上年",
-    "上期",
-    "年初"
-  ],
   "saved_queries": {},
   "tool_id": "audit_report_cleaner",
-  "tool_params": {}
+  "tool_params": {
+    "audit_report_cleaner": {
+      "sheet_keyword_bs": [
+        "BS",
+        "资产",
+        "01"
+      ],
+      "sheet_keyword_pl": [
+        "PL",
+        "利润",
+        "损益",
+        "02"
+      ],
+      "sheet_keyword_cf": [
+        "CF",
+        "现金",
+        "03"
+      ],
+      "header_keyword_bs": "",
+      "header_keyword_pl": "",
+      "header_keyword_cf": "",
+      "date_cells_bs": [],
+      "date_cells_pl": [],
+      "date_cells_cf": [],
+      "validation_tolerance": 0.01,
+      "col_keyword_subject": [
+        "资产",
+        "项目",
+        "科目",
+        "摘要"
+      ],
+      "col_keyword_period_end": [
+        "期末",
+        "本期",
+        "本年",
+        "金额"
+      ],
+      "col_keyword_period_start": [
+        "上年",
+        "上期",
+        "年初"
+      ]
+    }
+  }
 }

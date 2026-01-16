@@ -158,6 +158,13 @@
                <label class="form-label">科目包含 <span class="badge badge-subtle" style="font-weight: normal; font-size: 0.75rem;">支持多词（空格分隔）</span></label>
                <input id="qSubject" class="form-control" placeholder="例如：未分配利润 银行存款">
              </div>
+             <div class="form-group" style="grid-column: span 2;">
+               <label class="form-label">历史运行</label>
+               <div class="d-flex gap-2">
+                 <select id="qRunId" class="form-select flex-1"></select>
+                 <button id="btnReloadRuns" class="btn btn-secondary btn-sm">刷新</button>
+               </div>
+             </div>
              <div><label class="form-label">金额范围 (最小)</label><input id="qMinAmount" class="form-control" placeholder="0"></div>
              <div><label class="form-label">金额范围 (最大)</label><input id="qMaxAmount" class="form-control" placeholder="1000000"></div>
              <div><label class="form-label">源文件</label><select id="qSourceFile" class="form-select"></select></div>
@@ -356,7 +363,7 @@
       // Load data on view switch
       if (viewId === 'rules') loadRulesUI();
       if (viewId === 'config') reloadCfg();
-      if (viewId === 'query') { loadQueryOptions(false); loadSavedQueries(); }
+      if (viewId === 'query') { loadRuns(true).finally(() => loadQueryOptions(false)); loadSavedQueries(); }
     }
 
     function handleHashChange() {
@@ -450,10 +457,66 @@
         const opt = document.createElement('option'); opt.value = v; opt.innerText = v; sel.appendChild(opt);
       }
     }
+    function _formatRunOptionLabel(run) {
+      const rid = String(run?.run_id || '').trim();
+      const status = String(run?.status || '').trim();
+      const ts = String(run?.finished_at || run?.started_at || '').trim();
+      const rows = (run?.cleaned_rows != null ? Number(run.cleaned_rows) : null);
+      const rowsTxt = (rows != null && !Number.isNaN(rows)) ? ` | ${rows} 行` : '';
+      const tsTxt = ts ? ` | ${ts}` : '';
+      const statusTxt = status ? ` | ${status}` : '';
+      return `${rid}${tsTxt}${statusTxt}${rowsTxt}`;
+    }
+    function _setRunOptions(sel, runs) {
+      sel.innerHTML = '';
+      const optAuto = document.createElement('option');
+      optAuto.value = '';
+      optAuto.innerText = '自动（最新）';
+      sel.appendChild(optAuto);
+      for (const r of (runs || [])) {
+        const rid = String(r?.run_id || '').trim();
+        if (!rid) continue;
+        const opt = document.createElement('option');
+        opt.value = rid;
+        opt.innerText = _formatRunOptionLabel(r);
+        sel.appendChild(opt);
+      }
+    }
+    function getSelectedRunId() {
+      const el = document.getElementById('qRunId');
+      if (!el) return '';
+      return String(el.value || '').trim();
+    }
+    async function loadRuns(keepSelection) {
+      const sel = document.getElementById('qRunId');
+      if (!sel) return;
+
+      const prev = keepSelection ? getSelectedRunId() : '';
+      let runs = [];
+      let activeRunId = '';
+      try {
+        const active = await apiCall('/api/run/active');
+        activeRunId = String(active?.run?.run_id || '').trim();
+      } catch {}
+      try {
+        const data = await apiCall('/api/runs?limit=200');
+        runs = Array.isArray(data?.runs) ? data.runs : [];
+      } catch {}
+
+      _setRunOptions(sel, runs);
+
+      const validIds = new Set(runs.map(r => String(r?.run_id || '').trim()).filter(Boolean));
+      if (prev && validIds.has(prev)) sel.value = prev;
+      else if (activeRunId && validIds.has(activeRunId)) sel.value = activeRunId;
+      else sel.value = '';
+    }
     async function loadQueryOptions(force) {
       try {
-        // Need to pass tool_id to query options too if we want tool-specific sqlite
-        const data = await apiCall('/api/cleaned/options' + (force ? '&force=1' : ''));
+        const qs = new URLSearchParams();
+        qs.set('force', force ? '1' : '0');
+        const rid = getSelectedRunId();
+        if (rid) qs.set('run_id', rid);
+        const data = await apiCall('/api/cleaned/options?' + qs.toString());
         setSelectOptions(document.getElementById('qSourceFile'), data['源文件'] || []);
         setSelectOptions(document.getElementById('qDate'), data['日期'] || []);
         setSelectOptions(document.getElementById('qReportType'), data['报表类型'] || []);
@@ -464,6 +527,7 @@
     function getQueryPayload() {
       const num = (id) => { const v = document.getElementById(id).value.trim(); return v ? Number(v) : null; };
       return {
+        run_id: getSelectedRunId(),
         subject: document.getElementById('qSubject').value.trim(),
         source_file: document.getElementById('qSourceFile').value,
         date: document.getElementById('qDate').value,
@@ -644,6 +708,8 @@
     document.getElementById('btnClearFiles').addEventListener('click', () => document.getElementById('filesPreview').innerText = '');
     
     document.getElementById('btnReloadQueryOptions').addEventListener('click', () => loadQueryOptions(true));
+    document.getElementById('btnReloadRuns').addEventListener('click', () => loadRuns(true).finally(() => loadQueryOptions(false)));
+    document.getElementById('qRunId').addEventListener('change', () => { loadQueryOptions(false); runQuery(true); });
     document.getElementById('btnQuery').addEventListener('click', () => runQuery(true));
     document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
     document.getElementById('btnQueryPrev').addEventListener('click', () => { queryState.offset = Math.max(0, queryState.offset - queryState.limit); runQuery(false); });
@@ -653,9 +719,11 @@
        const k = document.getElementById('savedQueriesSelect').value;
        const q = savedQueries[k];
        if(q) {
+         if (document.getElementById('qRunId')) document.getElementById('qRunId').value = q.run_id||'';
          document.getElementById('qSubject').value = q.subject||'';
          document.getElementById('qSourceFile').value = q.source_file||'';
          // ... populate other fields ...
+         loadQueryOptions(false);
          setStatus('查询已加载');
        }
     });
