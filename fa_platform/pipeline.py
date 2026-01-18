@@ -64,12 +64,12 @@ def write_sqlite_tables(
         _to_sql(
             cleaned,
             "cleaned",
-            ["源文件", "日期", "报表类型", "大类", "时间属性", "科目", "金额", "来源Sheet"],
+            ["源文件", "期间", "报表类型", "大类", "时间属性", "科目", "金额", "来源Sheet"],
         )
         if validation is not None and isinstance(validation, pd.DataFrame) and not validation.empty:
-            _to_sql(validation, "validation", ["源文件", "日期", "是否平衡", "验证项目", "时间属性", "差额", "来源Sheet"])
+            _to_sql(validation, "validation", ["源文件", "期间", "是否平衡", "验证项目", "时间属性", "差额", "来源Sheet"])
         if metrics is not None and isinstance(metrics, pd.DataFrame) and not metrics.empty:
-            _to_sql(metrics, "metrics", ["源文件", "日期"])
+            _to_sql(metrics, "metrics", ["源文件", "期间"])
         conn.commit()
     finally:
         try:

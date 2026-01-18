@@ -86,4 +86,13 @@ def get_tool_web_entry_url(tool_id: str) -> Tuple[Optional[str], Optional[str]]:
     entry = str(manifest.get("entry") or "index.html").strip().lstrip("/")
     if not entry:
         entry = "index.html"
-    return f"/tools/{tid}/web/{entry}", None
+    url = f"/tools/{tid}/web/{entry}"
+    try:
+        p = get_resource_path(f"tools/{tid}/web/{entry}")
+        if p.exists() and p.is_file():
+            v = int(p.stat().st_mtime)
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}v={v}"
+    except Exception:
+        pass
+    return url, None

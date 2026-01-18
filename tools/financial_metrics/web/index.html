@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>生成财务指标</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    body { padding: 16px; background: var(--bg-body); }
+    .view-pane { animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <div class="app-container" style="padding: 0; max-width: none;">
+    <div class="view-pane" id="view-config">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-sliders"></i>配置</div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-secondary btn-sm" id="btnReloadCfg">加载</button>
+            <button class="btn btn-primary btn-sm" id="btnSaveCfg">保存</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-2">
+            <div class="form-group">
+              <label class="form-label">来源工具ID</label>
+              <input id="source_tool_id" class="form-control" value="report_ingestor">
+            </div>
+            <div class="form-group">
+              <label class="form-label">来源 run_id（可空=最新）</label>
+              <input id="source_run_id" class="form-control" placeholder="例如 20260117_120000">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="view-pane d-none" id="view-results">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-table"></i>结果</div>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-3">
+            <div class="form-group">
+              <label class="form-label">查看 run</label>
+              <div class="d-flex gap-2">
+                <select id="viewRunId" class="form-select"></select>
+                <button class="btn btn-secondary btn-sm" id="btnReloadRuns">刷新</button>
+              </div>
+              <div id="runMeta" class="text-mono" style="margin-top: .5rem; color: var(--text-secondary); font-size: .85rem;"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">财务指标</label>
+              <div id="outMetrics" class="text-mono"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">SQLite</label>
+              <div id="outSqlite" class="text-mono"></div>
+            </div>
+          </div>
+          <div class="d-flex gap-2 align-items-center" style="margin-top: 1rem;">
+            <input id="mSourceFile" class="form-control form-control-sm" placeholder="源文件" style="width: 180px;">
+            <input id="mPeriod" class="form-control form-control-sm" placeholder="期间" style="width: 140px;">
+            <button id="btnQueryMetrics" class="btn btn-primary btn-sm"><i class="bi bi-search"></i> 查询</button>
+            <div id="mMeta" class="text-mono" style="color: var(--text-secondary); font-size: .85rem;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">指标明细</div></div>
+        <div class="table-container" style="border:none; box-shadow:none; max-height: 520px;">
+          <table class="financial-table">
+            <thead id="tblHead"></thead>
+            <tbody id="tblBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const _pathParts = window.location.pathname.split('/');
+    let TOOL_ID = "financial_metrics";
+    if (_pathParts.includes('tools')) {
+      const idx = _pathParts.indexOf('tools');
+      if (idx + 1 < _pathParts.length) TOOL_ID = _pathParts[idx + 1];
+    }
+    function withToolId(url) {
+      const sep = url.includes('?') ? '&' : '?';
+      return `${url}${sep}tool_id=${TOOL_ID}`;
+    }
+    async function apiCall(url, opts) {
+      const resp = await fetch(withToolId(url), opts);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    }
+    function showView(viewId) {
+      document.querySelectorAll('.view-pane').forEach(el => el.classList.add('d-none'));
+      const el = document.getElementById(`view-${viewId}`);
+      if (el) el.classList.remove('d-none');
+      if (viewId === 'results') refreshResults();
+    }
+    function handleHashChange() {
+      const hash = String(window.location.hash || '').replace(/^#/, '');
+      const p = new URLSearchParams(hash);
+      const tab = String(p.get('tab') || '').trim();
+      showView(tab || 'config');
+    }
+    window.addEventListener('hashchange', handleHashChange);
+
+    function getCfgFromForm() {
+      return {
+        source_tool_id: String(document.getElementById('source_tool_id').value || '').trim(),
+        source_run_id: String(document.getElementById('source_run_id').value || '').trim()
+      };
+    }
+    function fillForm(cfg) {
+      document.getElementById('source_tool_id').value = cfg.source_tool_id || 'report_ingestor';
+      document.getElementById('source_run_id').value = cfg.source_run_id || '';
+    }
+    async function reloadCfg() {
+      try { fillForm(await apiCall('/api/config')); } catch {}
+    }
+    async function saveCfg() {
+      const payload = getCfgFromForm();
+      try { fillForm(await apiCall('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })); } catch {}
+    }
+
+    function renderTable(headEl, bodyEl, rows, columns) {
+      const cols = (columns && columns.length) ? columns : ((rows && rows.length) ? Object.keys(rows[0]) : []);
+      headEl.innerHTML = '';
+      bodyEl.innerHTML = '';
+      if (!cols.length) return;
+      const trh = document.createElement('tr');
+      for (const c of cols) {
+        const th = document.createElement('th');
+        th.innerText = c;
+        trh.appendChild(th);
+      }
+      headEl.appendChild(trh);
+      for (const r of (rows || [])) {
+        const tr = document.createElement('tr');
+        for (const c of cols) {
+          const td = document.createElement('td');
+          const v = r && (c in r) ? r[c] : '';
+          td.innerText = v == null ? '' : String(v);
+          tr.appendChild(td);
+        }
+        bodyEl.appendChild(tr);
+      }
+    }
+
+    function _formatRunOptionLabel(run) {
+      const rid = String(run?.run_id || '').trim();
+      const status = String(run?.status || '').trim();
+      const ts = String(run?.finished_at || run?.started_at || '').trim();
+      const rows = (run?.cleaned_rows != null ? Number(run.cleaned_rows) : null);
+      const rowsTxt = (rows != null && !Number.isNaN(rows)) ? ` | ${rows} 行` : '';
+      const tsTxt = ts ? ` | ${ts}` : '';
+      const statusTxt = status ? ` | ${status}` : '';
+      return `${rid}${tsTxt}${statusTxt}${rowsTxt}`;
+    }
+    function _setRunOptions(sel, runs) {
+      sel.innerHTML = '';
+      const optAuto = document.createElement('option');
+      optAuto.value = '';
+      optAuto.innerText = '自动（最新）';
+      sel.appendChild(optAuto);
+      for (const r of (runs || [])) {
+        const rid = String(r?.run_id || '').trim();
+        if (!rid) continue;
+        const opt = document.createElement('option');
+        opt.value = rid;
+        opt.innerText = _formatRunOptionLabel(r);
+        sel.appendChild(opt);
+      }
+    }
+    function getSelectedRunId() {
+      const el = document.getElementById('viewRunId');
+      return String(el?.value || '').trim();
+    }
+    function setRunMeta(info) {
+      const el = document.getElementById('runMeta');
+      const rid = String(info?.run_id || '').trim();
+      const ts = String(info?.finished_at || info?.started_at || '').trim();
+      const status = String(info?.status || '').trim();
+      el.innerText = rid ? `当前：${rid}${ts ? ` | ${ts}` : ''}${status ? ` | ${status}` : ''}` : '';
+    }
+    async function loadRuns(force) {
+      const sel = document.getElementById('viewRunId');
+      const prev = String(sel?.value || '').trim();
+      let runs = [];
+      try {
+        const data = await apiCall('/api/runs?limit=200');
+        runs = data?.runs || [];
+      } catch {}
+      _setRunOptions(sel, runs);
+      let activeRunId = '';
+      let activeInfo = null;
+      try {
+        const active = await apiCall('/api/run/active');
+        activeInfo = active?.run || null;
+        activeRunId = String(activeInfo?.run_id || '').trim();
+      } catch {}
+      const validIds = new Set((runs || []).map(r => String(r?.run_id || '').trim()).filter(Boolean));
+      if (prev && validIds.has(prev)) sel.value = prev;
+      else if (activeRunId && validIds.has(activeRunId)) sel.value = activeRunId;
+      else sel.value = '';
+      setRunMeta(activeInfo);
+      if (force) {
+        const rid = getSelectedRunId();
+        if (rid) {
+          try { await apiCall('/api/run/select?run_id=' + encodeURIComponent(rid), { method: 'POST' }); } catch {}
+        }
+      }
+    }
+
+    async function queryMetrics() {
+      const qs = new URLSearchParams();
+      const rid = getSelectedRunId();
+      if (rid) qs.set('run_id', rid);
+      const src = String(document.getElementById('mSourceFile').value || '').trim();
+      if (src) qs.set('source_file', src);
+      const p = String(document.getElementById('mPeriod').value || '').trim();
+      if (p) qs.set('period', p);
+      qs.set('limit', '200');
+      qs.set('offset', '0');
+      try {
+        const res = await apiCall('/api/metrics/query?' + qs.toString());
+        renderTable(document.getElementById('tblHead'), document.getElementById('tblBody'), res?.rows || [], res?.columns || []);
+        const meta = document.getElementById('mMeta');
+        const total = Number(res?.total || 0);
+        meta.innerText = `共 ${Number.isNaN(total) ? 0 : total} 行`;
+      } catch {
+        document.getElementById('mMeta').innerText = '';
+      }
+    }
+    async function refreshResults() {
+      await loadRuns(false);
+      await queryMetrics();
+    }
+
+    document.getElementById('btnReloadCfg').addEventListener('click', reloadCfg);
+    document.getElementById('btnSaveCfg').addEventListener('click', saveCfg);
+    document.getElementById('btnReloadRuns').addEventListener('click', () => refreshResults());
+    document.getElementById('viewRunId').addEventListener('change', async () => {
+      const rid = getSelectedRunId();
+      if (rid) {
+        try { await apiCall('/api/run/select?run_id=' + encodeURIComponent(rid), { method: 'POST' }); } catch {}
+      }
+      refreshResults();
+    });
+    document.getElementById('btnQueryMetrics').addEventListener('click', queryMetrics);
+
+    window.addEventListener('message', ev => {
+      if (ev.data && ev.data.type === 'fa.event') {
+        const { event, data } = ev.data;
+        if (event === 'done') {
+          const res = data.result || {};
+          document.getElementById('outMetrics').innerText = res.metrics_path || '';
+          document.getElementById('outSqlite').innerText = res.cleaned_sqlite_path || '';
+          renderTable(document.getElementById('tblHead'), document.getElementById('tblBody'), res.metrics_preview || []);
+          refreshResults();
+        }
+      }
+    });
+
+    handleHashChange();
+    reloadCfg();
+  </script>
+</body>
+</html>

@@ -13,8 +13,7 @@
 - 输出可追溯：每次运行生成时间戳目录，并写入 Run Index（`data/run_index.sqlite`）
 
 当前内置工具：
-- `monthly_report_cleaner`：月度报表清洗（可选：验证、指标）
-- `audit_report_cleaner`：审定报表清洗（清洗结果 + SQLite）
+- `report_ingestor`：报表清洗与落库（可选：验证、指标、累计库查询）
 
 ## 架构与目录结构
 
@@ -28,8 +27,7 @@ root/
 │   └── run_index.py              Run Index（data/run_index.sqlite）
 ├── tools/                        工具插件目录
 │   ├── builtin_tools.py          内置工具注册
-│   ├── monthly_report_cleaner/
-│   └── audit_report_cleaner/
+│   └── report_ingestor/
 ├── web/                          全局 Web Shell 与样式
 ├── financial_analyzer_web.py     Web 服务（FastAPI）
 ├── financial_analyzer_core.py    配置类型/工具注册表/命令行入口函数 main()
@@ -53,10 +51,10 @@ py -m pip install pandas openpyxl fastapi uvicorn
 ```
 
 ### 启动（推荐：显式指定配置）
-选择一个工具的配置文件作为启动入口（例如月度工具）：
+选择一个工具的配置文件作为启动入口（例如 report_ingestor）：
 
 ```powershell
-py -c "import financial_analyzer_web as w; raise SystemExit(w.run_web(r'.\tools\monthly_report_cleaner\config.json', port=8765))"
+py -c "import financial_analyzer_web as w; raise SystemExit(w.run_web(r'.\tools\report_ingestor\config.json', port=8765))"
 ```
 
 说明：
@@ -66,7 +64,7 @@ py -c "import financial_analyzer_web as w; raise SystemExit(w.run_web(r'.\tools\
 ### 启动（可选：用环境变量指定默认工具）
 
 ```powershell
-$env:FA_DEFAULT_TOOL_ID = "monthly_report_cleaner"
+$env:FA_DEFAULT_TOOL_ID = "report_ingestor"
 py .\financial_analyzer_web.py
 ```
 
@@ -75,7 +73,7 @@ py .\financial_analyzer_web.py
 CLI 入口是 `financial_analyzer_core.main()`，用 `-c` 调用：
 
 ```powershell
-py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config .\tools\monthly_report_cleaner\config.json
+py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config .\tools\report_ingestor\config.json
 ```
 
 可覆盖项（覆盖配置文件中的字段）：
@@ -87,7 +85,7 @@ py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config
 示例：
 
 ```powershell
-py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config .\tools\monthly_report_cleaner\config.json --input-dir "D:\data" --glob "*.xlsx"
+py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config .\tools\report_ingestor\config.json --input-dir "D:\data" --glob "*.xlsx"
 ```
 
 ## 配置、规则与工具

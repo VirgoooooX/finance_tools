@@ -1,0 +1,9 @@
+{
+  "name": "生成财务指标",
+  "entry": "index.html",
+  "version": "1.0.0",
+  "tabs": [
+    { "id": "config", "name": "配置", "icon": "bi-sliders" },
+    { "id": "results", "name": "结果", "icon": "bi-table" }
+  ]
+}

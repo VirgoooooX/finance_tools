@@ -122,13 +122,13 @@ root/
 显式传入某个工具的 config.json：
 
 ```powershell
-py -c "import financial_analyzer_web as w; raise SystemExit(w.run_web(r'.\tools\monthly_report_cleaner\config.json', port=8765))"
+py -c "import financial_analyzer_web as w; raise SystemExit(w.run_web(r'.\tools\report_ingestor\config.json', port=8765))"
 ```
 
 ### 7.2 启动 CLI
 
 ```powershell
-py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config .\tools\monthly_report_cleaner\config.json
+py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config .\tools\report_ingestor\config.json
 ```
 
 ## 8. 输出与存储规范

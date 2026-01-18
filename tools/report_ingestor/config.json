@@ -1,0 +1,192 @@
+{
+  "input_dir": "L:\\Web\\Financial data analysis",
+  "file_glob": "*.xlsx",
+  "output_dir": "output",
+  "output_basename": "清洗后的AI标准财务表.xlsx",
+  "generate_validation": false,
+  "generate_metrics": false,
+  "exclude_output_files": true,
+  "saved_queries": {},
+  "tool_id": "report_ingestor",
+  "tool_params": {
+    "report_ingestor": {
+      "sheet_rules": {
+        "match_mode": "exact",
+        "case_insensitive": true,
+        "rules": [
+          {
+            "statement": "BS",
+            "scope": "合并",
+            "entity": "集团合并",
+            "patterns": [
+              "BS-合并"
+            ]
+          },
+          {
+            "statement": "PL",
+            "scope": "合并",
+            "entity": "集团合并",
+            "patterns": [
+              "PL-合并"
+            ]
+          },
+          {
+            "statement": "CF",
+            "scope": "合并",
+            "entity": "集团合并",
+            "patterns": [
+              "CF-合并"
+            ]
+          },
+          {
+            "statement": "BS",
+            "scope": "单体",
+            "entity": "精铸",
+            "patterns": [
+              "精铸BS新"
+            ]
+          },
+          {
+            "statement": "PL",
+            "scope": "单体",
+            "entity": "精铸",
+            "patterns": [
+              "精铸PL新"
+            ]
+          },
+          {
+            "statement": "CF",
+            "scope": "单体",
+            "entity": "精铸",
+            "patterns": [
+              "精铸现金流量表"
+            ]
+          },
+          {
+            "statement": "BS",
+            "scope": "单体",
+            "entity": "新材料",
+            "patterns": [
+              "新材料BS新"
+            ]
+          },
+          {
+            "statement": "PL",
+            "scope": "单体",
+            "entity": "新材料",
+            "patterns": [
+              "新材料PL新"
+            ]
+          },
+          {
+            "statement": "CF",
+            "scope": "单体",
+            "entity": "新材料",
+            "patterns": [
+              "新材料现金流量表"
+            ]
+          },
+          {
+            "statement": "BS",
+            "scope": "单体",
+            "entity": "快速",
+            "patterns": [
+              "快速BS新"
+            ]
+          },
+          {
+            "statement": "PL",
+            "scope": "单体",
+            "entity": "快速",
+            "patterns": [
+              "快速PL新"
+            ]
+          },
+          {
+            "statement": "CF",
+            "scope": "单体",
+            "entity": "快速",
+            "patterns": [
+              "快速现金流量表"
+            ]
+          },
+          {
+            "statement": "BS",
+            "scope": "单体",
+            "entity": "热等静压",
+            "patterns": [
+              "热等静压BS新"
+            ]
+          },
+          {
+            "statement": "PL",
+            "scope": "单体",
+            "entity": "热等静压",
+            "patterns": [
+              "热等静压PL新"
+            ]
+          },
+          {
+            "statement": "CF",
+            "scope": "单体",
+            "entity": "热等静压",
+            "patterns": [
+              "热等静压现金流量表"
+            ]
+          }
+        ]
+      },
+      "header_keyword_bs": "期末余额",
+      "header_keyword_pl": "本年累计",
+      "header_keyword_cf": "本期金额",
+      "date_cells_bs": [
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "date_cells_pl": [
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          1
+        ]
+      ],
+      "date_cells_cf": [
+        [
+          2,
+          4
+        ],
+        [
+          2,
+          0
+        ]
+      ],
+      "validation_tolerance": 0.01,
+      "col_keyword_subject": [
+        "资产",
+        "项目",
+        "科目",
+        "摘要"
+      ],
+      "col_keyword_period_end": [
+        "期末",
+        "本期",
+        "本年",
+        "金额"
+      ],
+      "col_keyword_period_start": [
+        "上年",
+        "上期",
+        "年初"
+      ]
+    }
+  }
+}

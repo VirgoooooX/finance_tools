@@ -1,0 +1,14 @@
+{
+  "tool_id": "financial_metrics",
+  "input_dir": "",
+  "file_glob": "*.xlsx",
+  "output_dir": "output",
+  "output_basename": "",
+  "exclude_output_files": true,
+  "tool_params": {
+    "financial_metrics": {
+      "source_tool_id": "report_ingestor",
+      "source_run_id": ""
+    }
+  }
+}

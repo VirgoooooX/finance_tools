@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>审定报表清洗</title>
+  <title>报表清洗与落库工具</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-  <link href="/static/styles.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
   <style>
     body { padding: 16px; background: var(--bg-body); }
     .view-pane { animation: fadeIn 0.2s ease; }
@@ -40,60 +40,80 @@
                 </div>
                 <div class="form-group">
                   <label class="form-label">输出目录</label>
-                  <input id="output_dir" class="form-control" placeholder="例如：output">
+                  <input id="output_dir" class="form-control" placeholder="例如：L:\Web\Financial data analysis">
                 </div>
                 <div class="form-group col-span-2">
                   <label class="form-label">输出文件名</label>
-                  <input id="output_basename" class="form-control" placeholder="例如：审定报表清洗结果.xlsx">
+                  <input id="output_basename" class="form-control" placeholder="例如：清洗后的AI标准财务表.xlsx">
                 </div>
               </div>
             </div>
           </div>
 
           <div class="card">
-            <div class="card-header"><div class="card-title"><i class="bi bi-sliders2"></i>运行选项</div></div>
+            <div class="card-header">
+              <div class="card-title"><i class="bi bi-diagram-3"></i>Sheet 识别规则</div>
+              <div class="d-flex gap-2">
+                <button id="btnSheetRulesAdd" class="btn btn-secondary btn-sm"><i class="bi bi-plus"></i>新增规则</button>
+              </div>
+            </div>
             <div class="card-body">
-              <div class="d-flex items-center gap-2">
-                <input id="exclude_output_files" type="checkbox">
-                <label for="exclude_output_files" class="form-label" style="margin:0">排除输出文件</label>
+              <div class="grid grid-cols-3">
+                <div>
+                  <label class="form-label">匹配模式</label>
+                  <select id="sheet_rules_match_mode" class="form-select">
+                    <option value="exact">exact（完全一致）</option>
+                    <option value="contains">contains（包含）</option>
+                    <option value="regex">regex（正则）</option>
+                  </select>
+                </div>
+                <div class="col-span-2 d-flex items-center gap-2 mt-4">
+                  <input id="sheet_rules_case_insensitive" type="checkbox">
+                  <label for="sheet_rules_case_insensitive" class="form-label" style="margin:0">忽略大小写</label>
+                  <div class="form-help" style="margin:0 0 0 12px;">每条规则按 patterns 匹配 Sheet 名称</div>
+                </div>
+              </div>
+              <div class="table-container" style="margin-top: 1rem;">
+                <table class="financial-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 110px;">报表</th>
+                      <th style="width: 110px;">口径</th>
+                      <th style="width: 160px;">主体</th>
+                      <th>patterns（用 ; 分隔）</th>
+                      <th style="width: 70px;"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="sheetRulesBody"></tbody>
+                </table>
               </div>
             </div>
           </div>
 
           <div class="card">
-            <div class="card-header"><div class="card-title"><i class="bi bi-funnel"></i>关键字识别</div></div>
+            <div class="card-header"><div class="card-title"><i class="bi bi-funnel"></i>表头关键字</div></div>
             <div class="card-body">
               <div class="grid grid-cols-3">
-              <div><label class="form-label">BS Sheet 关键字 (逗号分隔)</label><input id="sheet_keyword_bs" class="form-control" placeholder="BS, 资产, 01"></div>
-              <div><label class="form-label">PL Sheet 关键字 (逗号分隔)</label><input id="sheet_keyword_pl" class="form-control" placeholder="PL, 利润, 损益"></div>
-              <div><label class="form-label">CF Sheet 关键字 (逗号分隔)</label><input id="sheet_keyword_cf" class="form-control" placeholder="CF, 现金, 03"></div>
-              <div><label class="form-label">BS 表头关键字</label><input id="header_keyword_bs" class="form-control"></div>
+                <div><label class="form-label">BS 表头关键字</label><input id="header_keyword_bs" class="form-control"></div>
                 <div><label class="form-label">PL 表头关键字</label><input id="header_keyword_pl" class="form-control"></div>
                 <div><label class="form-label">CF 表头关键字</label><input id="header_keyword_cf" class="form-control"></div>
               </div>
             </div>
           </div>
-
-          <div class="card">
-            <div class="card-header"><div class="card-title"><i class="bi bi-columns-gap"></i>列识别关键字</div></div>
+          
+           <div class="card">
+            <div class="card-header"><div class="card-title"><i class="bi bi-calendar-check"></i>日期与验证</div></div>
             <div class="card-body">
-              <div class="grid grid-cols-2">
-                <div class="form-group col-span-2">
-                  <label class="form-label">科目列识别 (逗号分隔)</label>
-                  <input id="col_keyword_subject" class="form-control" placeholder="资产, 项目, 科目, 摘要">
-                </div>
-                <div class="form-group col-span-2">
-                  <label class="form-label">期末/本期金额列 (逗号分隔)</label>
-                  <input id="col_keyword_period_end" class="form-control" placeholder="期末, 本期, 本年, 金额">
-                </div>
-                <div class="form-group col-span-2">
-                  <label class="form-label">年初/上期金额列 (逗号分隔)</label>
-                  <input id="col_keyword_period_start" class="form-control" placeholder="上年, 上期, 年初">
+              <div class="grid grid-cols-3">
+                <div><label class="form-label">BS 日期单元格</label><input id="date_cells_bs" class="form-control" placeholder="行,列"></div>
+                <div><label class="form-label">PL 日期单元格</label><input id="date_cells_pl" class="form-control" placeholder="行,列"></div>
+                <div><label class="form-label">CF 日期单元格</label><input id="date_cells_cf" class="form-control" placeholder="行,列"></div>
+                <div class="col-span-3 d-flex items-center gap-4 mt-4">
+                  <div class="d-flex items-center gap-2"><input id="exclude_output_files" type="checkbox"><label for="exclude_output_files" class="form-label" style="margin:0">排除输出文件</label></div>
                 </div>
               </div>
             </div>
           </div>
-          
         </div>
         
         <!-- Sidebar -->
@@ -158,23 +178,22 @@
                <label class="form-label">科目包含 <span class="badge badge-subtle" style="font-weight: normal; font-size: 0.75rem;">支持多词（空格分隔）</span></label>
                <input id="qSubject" class="form-control" placeholder="例如：未分配利润 银行存款">
              </div>
-             <div class="form-group" style="grid-column: span 2;">
-               <label class="form-label">历史运行</label>
-               <div class="d-flex gap-2">
-                 <select id="qRunId" class="form-select flex-1"></select>
-                 <button id="btnReloadRuns" class="btn btn-secondary btn-sm">刷新</button>
+             <div class="form-group">
+               <label class="form-label">最新报表期间</label>
+               <div class="d-flex gap-2 align-items-center">
+                 <span id="qLatestPeriod" class="badge badge-subtle" style="font-size: .95rem;">-</span>
                </div>
              </div>
              <div><label class="form-label">金额范围 (最小)</label><input id="qMinAmount" class="form-control" placeholder="0"></div>
              <div><label class="form-label">金额范围 (最大)</label><input id="qMaxAmount" class="form-control" placeholder="1000000"></div>
              <div><label class="form-label">源文件</label><select id="qSourceFile" class="form-select"></select></div>
-             <div><label class="form-label">日期</label><select id="qDate" class="form-select"></select></div>
+             <div><label class="form-label">期间</label><select id="qPeriod" class="form-select"></select></div>
              <div><label class="form-label">报表类型</label><select id="qReportType" class="form-select"></select></div>
              <div><label class="form-label">时间属性</label><select id="qTimeAttr" class="form-select"></select></div>
              <div>
                <label class="form-label">排序字段</label>
                <select id="qSortBy" class="form-select">
-                 <option value="金额">金额</option><option value="日期">日期</option><option value="报表类型">报表类型</option>
+                 <option value="金额">金额</option><option value="期间">期间</option><option value="报表类型">报表类型</option>
                  <option value="大类">大类</option><option value="科目">科目</option><option value="源文件">源文件</option>
                  <option value="来源Sheet">来源Sheet</option><option value="时间属性">时间属性</option>
                </select>
@@ -190,7 +209,7 @@
              <div>
                <label class="form-label">分组维度 (汇总)</label>
                <select id="qGroupBy" class="form-select">
-                 <option value="">不分组</option><option value="源文件">源文件</option><option value="日期">日期</option>
+                 <option value="">不分组</option><option value="源文件">源文件</option><option value="期间">期间</option>
                  <option value="报表类型">报表类型</option><option value="大类">大类</option><option value="科目">科目</option>
                  <option value="时间属性">时间属性</option><option value="来源Sheet">来源Sheet</option>
                </select>
@@ -224,15 +243,24 @@
       <div class="card">
         <div class="card-header"><div class="card-title">输出文件</div></div>
         <div class="card-body">
-          <div class="grid grid-cols-2">
+          <div class="grid grid-cols-1">
             <div>
-              <div class="form-label">清洗结果</div>
+              <div class="form-label">清洗数据</div>
               <div class="d-flex gap-2 mt-1">
                 <div id="outCleaned" class="text-mono form-control flex-1" style="background: var(--bg-subtle); border: none; overflow: hidden; text-overflow: ellipsis;"></div>
                 <button class="btn btn-secondary" onclick="openPath('cleaned')">打开</button>
               </div>
             </div>
-            <!-- Audit tool currently only outputs cleaned data -->
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">更多分析</div></div>
+        <div class="card-body">
+          <div class="d-flex gap-2">
+            <a class="btn btn-secondary" href="/tools/validation_report/web/#tab=results" target="_blank" rel="noopener">打开验证工具结果页</a>
+            <a class="btn btn-secondary" href="/tools/financial_metrics/web/#tab=results" target="_blank" rel="noopener">打开指标工具结果页</a>
           </div>
         </div>
       </div>
@@ -335,23 +363,11 @@
     // --- Global State ---
     let queryState = { offset: 0, limit: 200, total: 0 };
     let savedQueries = {};
-    let latestPaths = { cleaned: '', validation: '', metrics: '' };
+    let latestPaths = { cleaned: '' };
     let _rulesLoadedOnce = false;
     let _rulesState = { rules: null };
-    
-    // Auto-detect tool_id from URL path: /tools/{tool_id}/web/index.html
-    const _pathParts = window.location.pathname.split('/');
-    let TOOL_ID = "audit_report_cleaner"; // Default fallback
-    if(_pathParts.includes('tools')) {
-        const idx = _pathParts.indexOf('tools');
-        if(idx + 1 < _pathParts.length) TOOL_ID = _pathParts[idx+1];
-    }
-
-    // Helper to append tool_id
-    function withToolId(url) {
-        const sep = url.includes('?') ? '&' : '?';
-        return `${url}${sep}tool_id=${TOOL_ID}`;
-    }
+    let warehouseSummary = null;
+    let warehouseSummaryText = '';
     
     // --- Router & Utils ---
     function showView(viewId) {
@@ -363,7 +379,7 @@
       // Load data on view switch
       if (viewId === 'rules') loadRulesUI();
       if (viewId === 'config') reloadCfg();
-      if (viewId === 'query') { loadRuns(true).finally(() => loadQueryOptions(false)); loadSavedQueries(); }
+      if (viewId === 'query') { loadQueryOptions(false); loadSavedQueries(); }
     }
 
     function handleHashChange() {
@@ -376,11 +392,29 @@
     window.addEventListener('hashchange', handleHashChange);
     
     function setStatus(text) {
+      // Send status to platform
+      // But also we can just log to console or ignore, platform handles its own status bar.
+      // Maybe show a toast? For now, we'll use postMessage to update platform if needed,
+      // but platform listens to backend stream. 
+      // If this is a UI message (like "Saved"), we can just console.log or use a simple toast.
       console.log('Status:', text);
     }
     
+    // Auto-detect tool_id from URL path: /tools/{tool_id}/web/index.html
+    const _pathParts = window.location.pathname.split('/');
+    let TOOL_ID = "report_ingestor"; // Default fallback
+    if(_pathParts.includes('tools')) {
+        const idx = _pathParts.indexOf('tools');
+        if(idx + 1 < _pathParts.length) TOOL_ID = _pathParts[idx+1];
+    }
+
+    // Helper to append tool_id
+    function withToolId(url) {
+        const sep = url.includes('?') ? '&' : '?';
+        return `${url}${sep}tool_id=${TOOL_ID}`;
+    }
+
     async function apiCall(url, opts) {
-      // Append tool_id to all API calls
       const fullUrl = withToolId(url);
       const resp = await fetch(fullUrl, opts);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -388,45 +422,125 @@
     }
     
     // --- Config Logic ---
+    function cellsToText(cells) {
+      if (!Array.isArray(cells)) return '';
+      return cells.map(x => Array.isArray(x) && x.length >= 2 ? `${x[0]},${x[1]}` : '').filter(Boolean).join(';');
+    }
+    function textToCells(text) {
+      const s = (text || '').trim();
+      if (!s) return [];
+      return s.split(/[;\n|]+/).map(x => x.trim()).filter(Boolean).map(chunk => {
+        const parts = chunk.split(/[, \t]+/).map(x => x.trim()).filter(Boolean);
+        if (parts.length < 2) return null;
+        const r = parseInt(parts[0]); const c = parseInt(parts[1]);
+        if (Number.isNaN(r) || Number.isNaN(c)) return null;
+        return [r, c];
+      }).filter(Boolean);
+    }
+    function patternsToText(patterns) {
+      if (!Array.isArray(patterns)) return '';
+      return patterns.map(x => String(x || '').trim()).filter(Boolean).join(';');
+    }
+    function textToPatterns(text) {
+      const s = String(text || '').trim();
+      if (!s) return [];
+      return s.split(/[;\n|]+/).map(x => x.trim()).filter(Boolean);
+    }
+    function _escapeHtml2(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function _addSheetRuleRow(rule) {
+      const r = rule || {};
+      const st = String(r.statement || '').trim();
+      const scope = String(r.scope || '').trim();
+      const entity = String(r.entity || '').trim();
+      const patterns = patternsToText(r.patterns);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>
+          <select class="form-select form-select-sm" data-role="statement">
+            <option value=""></option>
+            <option value="BS">BS</option>
+            <option value="PL">PL</option>
+            <option value="CF">CF</option>
+          </select>
+        </td>
+        <td>
+          <select class="form-select form-select-sm" data-role="scope">
+            <option value=""></option>
+            <option value="合并">合并</option>
+            <option value="单体">单体</option>
+          </select>
+        </td>
+        <td><input class="form-control form-control-sm" data-role="entity" value="${_escapeHtml2(entity)}"></td>
+        <td><input class="form-control form-control-sm" data-role="patterns" value="${_escapeHtml2(patterns)}"></td>
+        <td class="text-right"><button class="btn btn-danger btn-sm" data-role="delete"><i class="bi bi-trash"></i></button></td>
+      `;
+      const stSel = tr.querySelector('[data-role="statement"]');
+      const scSel = tr.querySelector('[data-role="scope"]');
+      if (stSel && st && !Array.from(stSel.options).some(o => o.value === st)) {
+        const opt = document.createElement('option');
+        opt.value = st;
+        opt.innerText = st;
+        stSel.appendChild(opt);
+      }
+      if (stSel) stSel.value = st;
+      if (scSel) scSel.value = scope;
+      tr.querySelector('[data-role="delete"]').addEventListener('click', () => tr.remove());
+      document.getElementById('sheetRulesBody').appendChild(tr);
+    }
+    function _fillSheetRulesUI(sheetRules) {
+      const sr = (sheetRules && typeof sheetRules === 'object') ? sheetRules : {};
+      const mode = String(sr.match_mode || 'contains').trim().toLowerCase();
+      document.getElementById('sheet_rules_match_mode').value = (['exact','contains','regex'].includes(mode) ? mode : 'contains');
+      document.getElementById('sheet_rules_case_insensitive').checked = (sr.case_insensitive !== false);
+      document.getElementById('sheetRulesBody').innerHTML = '';
+      const rules = Array.isArray(sr.rules) ? sr.rules : [];
+      if (rules.length) rules.forEach(r => _addSheetRuleRow(r));
+      else _addSheetRuleRow({ statement: 'BS', scope: '合并', entity: '集团合并', patterns: ['BS-合并'] });
+    }
+    function _getSheetRulesFromUI() {
+      const mode = String(document.getElementById('sheet_rules_match_mode').value || 'contains').trim();
+      const ci = !!document.getElementById('sheet_rules_case_insensitive').checked;
+      const rules = [];
+      document.querySelectorAll('#sheetRulesBody tr').forEach(tr => {
+        const statement = String(tr.querySelector('[data-role="statement"]')?.value || '').trim();
+        const scope = String(tr.querySelector('[data-role="scope"]')?.value || '').trim();
+        const entity = String(tr.querySelector('[data-role="entity"]')?.value || '').trim();
+        const patterns = textToPatterns(tr.querySelector('[data-role="patterns"]')?.value || '');
+        const isEmpty = !statement && !scope && !entity && patterns.length === 0;
+        if (isEmpty) return;
+        rules.push({ statement, scope, entity, patterns });
+      });
+      return { match_mode: mode, case_insensitive: ci, rules };
+    }
     function getCfgFromForm() {
-      const split = s => (s||'').split(/[,，]/).map(x=>x.trim()).filter(Boolean);
       return {
         input_dir: document.getElementById('input_dir').value.trim(),
         file_glob: document.getElementById('file_glob').value.trim(),
         output_dir: document.getElementById('output_dir').value.trim(),
         output_basename: document.getElementById('output_basename').value.trim(),
         exclude_output_files: document.getElementById('exclude_output_files').checked,
-        
-        sheet_keyword_bs: split(document.getElementById('sheet_keyword_bs').value),
-        sheet_keyword_pl: split(document.getElementById('sheet_keyword_pl').value),
-        sheet_keyword_cf: split(document.getElementById('sheet_keyword_cf').value),
+        sheet_rules: _getSheetRulesFromUI(),
         header_keyword_bs: document.getElementById('header_keyword_bs').value.trim(),
         header_keyword_pl: document.getElementById('header_keyword_pl').value.trim(),
         header_keyword_cf: document.getElementById('header_keyword_cf').value.trim(),
-        
-        col_keyword_subject: split(document.getElementById('col_keyword_subject').value),
-        col_keyword_period_end: split(document.getElementById('col_keyword_period_end').value),
-        col_keyword_period_start: split(document.getElementById('col_keyword_period_start').value),
+        date_cells_bs: textToCells(document.getElementById('date_cells_bs').value),
+        date_cells_pl: textToCells(document.getElementById('date_cells_pl').value),
+        date_cells_cf: textToCells(document.getElementById('date_cells_cf').value)
       };
     }
     function fillForm(cfg) {
-      const join = l => Array.isArray(l) ? l.join(', ') : (l || '');
       document.getElementById('input_dir').value = cfg.input_dir || '';
       document.getElementById('file_glob').value = cfg.file_glob || '';
       document.getElementById('output_dir').value = cfg.output_dir || '';
       document.getElementById('output_basename').value = cfg.output_basename || '';
       document.getElementById('exclude_output_files').checked = !!cfg.exclude_output_files;
-      
-      document.getElementById('sheet_keyword_bs').value = join(cfg.sheet_keyword_bs);
-      document.getElementById('sheet_keyword_pl').value = join(cfg.sheet_keyword_pl);
-      document.getElementById('sheet_keyword_cf').value = join(cfg.sheet_keyword_cf);
+      _fillSheetRulesUI(cfg.sheet_rules || {});
       document.getElementById('header_keyword_bs').value = cfg.header_keyword_bs || '';
       document.getElementById('header_keyword_pl').value = cfg.header_keyword_pl || '';
       document.getElementById('header_keyword_cf').value = cfg.header_keyword_cf || '';
-      
-      document.getElementById('col_keyword_subject').value = join(cfg.col_keyword_subject);
-      document.getElementById('col_keyword_period_end').value = join(cfg.col_keyword_period_end);
-      document.getElementById('col_keyword_period_start').value = join(cfg.col_keyword_period_start);
+      document.getElementById('date_cells_bs').value = cellsToText(cfg.date_cells_bs);
+      document.getElementById('date_cells_pl').value = cellsToText(cfg.date_cells_pl);
+      document.getElementById('date_cells_cf').value = cellsToText(cfg.date_cells_cf);
     }
     async function reloadCfg() {
       try { fillForm(await apiCall('/api/config')); setStatus('已加载配置'); } catch {}
@@ -441,8 +555,6 @@
     }
     async function scanFiles() {
       await saveCfg();
-      // Scan also needs tool_id context for config? Actually scan uses current config in memory or reload?
-      // Platform scan API uses runner.cfg. So we must ensure config is set. saveCfg does that.
       const data = await apiCall('/api/scan', { method: 'POST' });
       const box = document.getElementById('filesPreview');
       if (!data.files || data.files.length === 0) { box.innerText = '未找到匹配文件'; return; }
@@ -457,80 +569,44 @@
         const opt = document.createElement('option'); opt.value = v; opt.innerText = v; sel.appendChild(opt);
       }
     }
-    function _formatRunOptionLabel(run) {
-      const rid = String(run?.run_id || '').trim();
-      const status = String(run?.status || '').trim();
-      const ts = String(run?.finished_at || run?.started_at || '').trim();
-      const rows = (run?.cleaned_rows != null ? Number(run.cleaned_rows) : null);
-      const rowsTxt = (rows != null && !Number.isNaN(rows)) ? ` | ${rows} 行` : '';
-      const tsTxt = ts ? ` | ${ts}` : '';
-      const statusTxt = status ? ` | ${status}` : '';
-      return `${rid}${tsTxt}${statusTxt}${rowsTxt}`;
-    }
-    function _setRunOptions(sel, runs) {
-      sel.innerHTML = '';
-      const optAuto = document.createElement('option');
-      optAuto.value = '';
-      optAuto.innerText = '自动（最新）';
-      sel.appendChild(optAuto);
-      for (const r of (runs || [])) {
-        const rid = String(r?.run_id || '').trim();
-        if (!rid) continue;
-        const opt = document.createElement('option');
-        opt.value = rid;
-        opt.innerText = _formatRunOptionLabel(r);
-        sel.appendChild(opt);
-      }
-    }
-    function getSelectedRunId() {
-      const el = document.getElementById('qRunId');
-      if (!el) return '';
-      return String(el.value || '').trim();
-    }
-    async function loadRuns(keepSelection) {
-      const sel = document.getElementById('qRunId');
-      if (!sel) return;
-
-      const prev = keepSelection ? getSelectedRunId() : '';
-      let runs = [];
-      let activeRunId = '';
-      try {
-        const active = await apiCall('/api/run/active');
-        activeRunId = String(active?.run?.run_id || '').trim();
-      } catch {}
-      try {
-        const data = await apiCall('/api/runs?limit=200');
-        runs = Array.isArray(data?.runs) ? data.runs : [];
-      } catch {}
-
-      _setRunOptions(sel, runs);
-
-      const validIds = new Set(runs.map(r => String(r?.run_id || '').trim()).filter(Boolean));
-      if (prev && validIds.has(prev)) sel.value = prev;
-      else if (activeRunId && validIds.has(activeRunId)) sel.value = activeRunId;
-      else sel.value = '';
+    function _formatWarehouseSummaryText(summary) {
+      const s = summary && summary.ok ? summary : null;
+      if (!s) return '';
+      const rows = (s.rows != null ? Number(s.rows) : null);
+      const rowsTxt = (rows != null && !Number.isNaN(rows)) ? `共 ${rows} 行` : '';
+      const minP = String(s.earliest_period || '').trim();
+      const maxP = String(s.latest_period || '').trim();
+      const pTxt = (minP || maxP) ? `覆盖：${minP || '?'}-${maxP || '?'}` : '';
+      const t = String(s.latest_imported_at || '').trim();
+      const tTxt = t ? `最近导入：${t}` : '';
+      const parts = [rowsTxt, pTxt, tTxt].filter(Boolean);
+      return parts.length ? `数据源：累计库 | ${parts.join(' | ')}` : '数据源：累计库';
     }
     async function loadQueryOptions(force) {
       try {
-        const qs = new URLSearchParams();
-        qs.set('force', force ? '1' : '0');
-        const rid = getSelectedRunId();
-        if (rid) qs.set('run_id', rid);
-        const data = await apiCall('/api/cleaned/options?' + qs.toString());
+        const data = await apiCall('/api/warehouse/options');
+        let summary = null;
+        try { summary = await apiCall('/api/warehouse/summary'); } catch {}
+        warehouseSummary = (summary && summary.ok) ? summary : null;
+        warehouseSummaryText = _formatWarehouseSummaryText(warehouseSummary);
+        try {
+          const lp = String(warehouseSummary?.latest_period || '').trim();
+          const el = document.getElementById('qLatestPeriod');
+          if (el) el.innerText = lp || '-';
+        } catch {}
         setSelectOptions(document.getElementById('qSourceFile'), data['源文件'] || []);
-        setSelectOptions(document.getElementById('qDate'), data['日期'] || []);
+        setSelectOptions(document.getElementById('qPeriod'), data['期间'] || []);
         setSelectOptions(document.getElementById('qReportType'), data['报表类型'] || []);
         setSelectOptions(document.getElementById('qTimeAttr'), data['时间属性'] || []);
-        document.getElementById('qMeta').innerText = `数据源：${(data.path || '').split(/[\\\\/]/).pop()} | 共 ${data.rows || 0} 行`;
+        document.getElementById('qMeta').innerText = warehouseSummaryText || `数据源：累计库 | 共 ${data.rows || 0} 行`;
       } catch { document.getElementById('qMeta').innerText = '未找到清洗表'; }
     }
     function getQueryPayload() {
       const num = (id) => { const v = document.getElementById(id).value.trim(); return v ? Number(v) : null; };
       return {
-        run_id: getSelectedRunId(),
         subject: document.getElementById('qSubject').value.trim(),
         source_file: document.getElementById('qSourceFile').value,
-        date: document.getElementById('qDate').value,
+        period: document.getElementById('qPeriod').value,
         report_type: document.getElementById('qReportType').value,
         time_attr: document.getElementById('qTimeAttr').value,
         min_amount: num('qMinAmount'), max_amount: num('qMaxAmount'),
@@ -544,13 +620,13 @@
       const p = getQueryPayload();
       const qs = new URLSearchParams();
       Object.entries(p).forEach(([k,v]) => { if(v!=null && v!=='') qs.set(k, String(v)); });
-      // apiCall handles tool_id
       try {
-        const data = await apiCall('/api/cleaned/query?' + qs.toString());
+        const data = await apiCall('/api/warehouse/query?' + qs.toString());
         queryState.total = data.total || 0; queryState.offset = data.offset || 0;
-        document.getElementById('qMeta').innerText = `命中 ${data.total} 行 | ${data.offset+1}-${Math.min(data.offset+data.limit, data.total)}`;
+        const hitTxt = `命中 ${data.total} 行 | ${data.offset+1}-${Math.min(data.offset+data.limit, data.total)}`;
+        document.getElementById('qMeta').innerText = (warehouseSummaryText) ? `${warehouseSummaryText} | ${hitTxt}` : hitTxt;
         renderTable(document.getElementById('cleanedHead'), document.getElementById('cleanedBody'), data.rows || [], 
-          ['源文件', '日期', '报表类型', '大类', '科目', '时间属性', '金额', '条数', '来源Sheet']);
+          ['源文件', '期间', '报表类型', '大类', '科目', '时间属性', '金额', '条数', '来源Sheet']);
       } catch { setStatus('查询失败'); }
     }
     function exportCSV() {
@@ -558,9 +634,7 @@
       const qs = new URLSearchParams();
       Object.entries(p).forEach(([k,v]) => { if(v!=null && v!=='') qs.set(k, String(v)); });
       qs.set('format', document.getElementById('qExportFormat').value);
-      // Need manual tool_id append since window.open doesn't use apiCall
-      qs.set('tool_id', TOOL_ID);
-      window.open('/api/cleaned/export?' + qs.toString(), '_blank');
+      window.open('/api/warehouse/export?' + qs.toString(), '_blank');
     }
     async function loadSavedQueries() {
       try {
@@ -616,6 +690,9 @@
     }
 
     // --- Rules Logic ---
+    // (Simplified Rules Logic for brevity - full logic needs _validateRulesObject etc.)
+    // For this migration, we'll keep the UI structure but maybe assume user is editing JSON mostly if tables are complex.
+    // Actually, let's copy the full logic helpers.
     function _splitList(s) { return (s||'').trim().split(/[\s,，、;；|/]+/).map(x=>x.trim()).filter(Boolean); }
     function _escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function _syncRulesJsonFromTables() {
@@ -677,7 +754,6 @@
       if (_rulesLoadedOnce) return;
       try {
         const data = await apiCall('/api/rules');
-        document.getElementById('rulesPathText').innerText = data.path || '';
         const r = data.rules || {};
         document.getElementById('rulesAliasesBody').innerHTML = '';
         document.getElementById('rulesVarsBody').innerHTML = '';
@@ -705,25 +781,31 @@
     document.getElementById('btnSaveCfg').addEventListener('click', saveCfg);
     document.getElementById('btnSaveCfg2').addEventListener('click', saveCfg);
     document.getElementById('btnScan2').addEventListener('click', scanFiles);
+    document.getElementById('btnSheetRulesAdd').addEventListener('click', () => _addSheetRuleRow({ statement: '', scope: '', entity: '', patterns: [] }));
     document.getElementById('btnClearFiles').addEventListener('click', () => document.getElementById('filesPreview').innerText = '');
     
     document.getElementById('btnReloadQueryOptions').addEventListener('click', () => loadQueryOptions(true));
-    document.getElementById('btnReloadRuns').addEventListener('click', () => loadRuns(true).finally(() => loadQueryOptions(false)));
-    document.getElementById('qRunId').addEventListener('change', () => { loadQueryOptions(false); runQuery(true); });
     document.getElementById('btnQuery').addEventListener('click', () => runQuery(true));
     document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
     document.getElementById('btnQueryPrev').addEventListener('click', () => { queryState.offset = Math.max(0, queryState.offset - queryState.limit); runQuery(false); });
     document.getElementById('btnQueryNext').addEventListener('click', () => { queryState.offset = queryState.offset + queryState.limit; runQuery(false); });
     
-    document.getElementById('btnLoadSavedQuery').addEventListener('click', () => {
+    document.getElementById('btnLoadSavedQuery').addEventListener('click', async () => {
        const k = document.getElementById('savedQueriesSelect').value;
        const q = savedQueries[k];
        if(q) {
-         if (document.getElementById('qRunId')) document.getElementById('qRunId').value = q.run_id||'';
+         await loadQueryOptions(false);
          document.getElementById('qSubject').value = q.subject||'';
          document.getElementById('qSourceFile').value = q.source_file||'';
-         // ... populate other fields ...
-         loadQueryOptions(false);
+         document.getElementById('qPeriod').value = q.period||q.date||'';
+         document.getElementById('qReportType').value = q.report_type||'';
+         document.getElementById('qTimeAttr').value = q.time_attr||'';
+         if (document.getElementById('qMinAmount')) document.getElementById('qMinAmount').value = (q.min_amount!=null?String(q.min_amount):'');
+         if (document.getElementById('qMaxAmount')) document.getElementById('qMaxAmount').value = (q.max_amount!=null?String(q.max_amount):'');
+         if (document.getElementById('qSortBy')) document.getElementById('qSortBy').value = q.sort_by||'金额';
+         if (document.getElementById('qSortDir')) document.getElementById('qSortDir').value = q.sort_dir||'desc';
+         if (document.getElementById('qTopN')) document.getElementById('qTopN').value = (q.topn!=null?String(q.topn):'');
+         if (document.getElementById('qGroupBy')) document.getElementById('qGroupBy').value = q.group_by||'';
          setStatus('查询已加载');
        }
     });
@@ -733,7 +815,8 @@
       const p = getQueryPayload();
       try { await apiCall(`/api/config/queries/${encodeURIComponent(name)}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(p) }); loadSavedQueries(); } catch {}
     });
-    
+
+    // Sub-tab switching for Rules
     document.getElementById('rulesSubTabs').addEventListener('click', e => {
       const btn = e.target.closest('.nav-tab');
       if(!btn) return;
@@ -749,7 +832,7 @@
         const { event, data } = ev.data;
         if(event === 'done') {
            const res = data.result || {};
-           latestPaths = { cleaned: res.cleaned_path||'', validation: res.validation_path||'', metrics: res.metrics_path||'' };
+           latestPaths = { cleaned: res.cleaned_path||'' };
            document.getElementById('outCleaned').innerText = latestPaths.cleaned;
         }
       }

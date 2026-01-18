@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>生成验证报告</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    body { padding: 16px; background: var(--bg-body); }
+    .view-pane { animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <div class="app-container" style="padding: 0; max-width: none;">
+    <div class="view-pane" id="view-config">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-sliders"></i>配置</div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-secondary btn-sm" id="btnReloadCfg">加载</button>
+            <button class="btn btn-primary btn-sm" id="btnSaveCfg">保存</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-3">
+            <div class="form-group">
+              <label class="form-label">来源工具ID</label>
+              <input id="source_tool_id" class="form-control" value="report_ingestor">
+            </div>
+            <div class="form-group">
+              <label class="form-label">来源 run_id（可空=最新）</label>
+              <input id="source_run_id" class="form-control" placeholder="例如 20260117_120000">
+            </div>
+            <div class="form-group">
+              <label class="form-label">验证容差</label>
+              <input id="validation_tolerance" class="form-control" value="0.01">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="view-pane d-none" id="view-results">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-table"></i>结果</div>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-3">
+            <div class="form-group">
+              <label class="form-label">查看 run</label>
+              <div class="d-flex gap-2">
+                <select id="viewRunId" class="form-select"></select>
+                <button class="btn btn-secondary btn-sm" id="btnReloadRuns">刷新</button>
+              </div>
+              <div id="runMeta" class="text-mono" style="margin-top: .5rem; color: var(--text-secondary); font-size: .85rem;"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">验证报告</label>
+              <div id="outValidation" class="text-mono"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">SQLite</label>
+              <div id="outSqlite" class="text-mono"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">验证汇总</div></div>
+        <div class="table-container" style="border:none; box-shadow:none;">
+           <table class="financial-table">
+             <thead>
+               <tr><th>源文件</th><th>期间</th><th>验证项目</th><th>总条数</th><th>不平衡条数</th><th>最大差额</th><th>平均差额</th></tr>
+             </thead>
+             <tbody id="validationSummaryBody"></tbody>
+           </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+           <div class="card-title" style="color: var(--danger);">不平衡记录查询</div>
+           <div class="d-flex gap-2 align-items-center">
+             <input id="vMinDiff" class="form-control form-control-sm" placeholder="最小差额" style="width: 100px;">
+             <input id="vSourceFile" class="form-control form-control-sm" placeholder="源文件" style="width: 150px;">
+             <select id="vIsBalanced" class="form-select form-select-sm" style="width: 100px;"><option value="">全部</option><option value="否" selected>不平衡</option><option value="是">平衡</option></select>
+             <button id="btnQueryValidation" class="btn btn-primary btn-sm"><i class="bi bi-search"></i> 查询</button>
+           </div>
+        </div>
+        <div class="table-container" style="border:none; box-shadow:none;">
+           <table class="financial-table">
+             <thead>
+               <tr><th>源文件</th><th>来源Sheet</th><th>期间</th><th>时间属性</th><th>差额</th><th>验证结果</th></tr>
+             </thead>
+             <tbody id="unbalancedBody"></tbody>
+           </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">验证报告明细</div></div>
+        <div class="table-container" style="border:none; box-shadow:none; max-height: 520px;">
+          <table class="financial-table">
+            <thead id="tblHead"></thead>
+            <tbody id="tblBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const _pathParts = window.location.pathname.split('/');
+    let TOOL_ID = "validation_report";
+    if (_pathParts.includes('tools')) {
+      const idx = _pathParts.indexOf('tools');
+      if (idx + 1 < _pathParts.length) TOOL_ID = _pathParts[idx + 1];
+    }
+    function withToolId(url) {
+      const sep = url.includes('?') ? '&' : '?';
+      return `${url}${sep}tool_id=${TOOL_ID}`;
+    }
+    async function apiCall(url, opts) {
+      const resp = await fetch(withToolId(url), opts);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    }
+    function showView(viewId) {
+      document.querySelectorAll('.view-pane').forEach(el => el.classList.add('d-none'));
+      const el = document.getElementById(`view-${viewId}`);
+      if (el) el.classList.remove('d-none');
+      if (viewId === 'results') refreshResults();
+    }
+    function handleHashChange() {
+      const hash = String(window.location.hash || '').replace(/^#/, '');
+      const p = new URLSearchParams(hash);
+      const tab = String(p.get('tab') || '').trim();
+      showView(tab || 'config');
+    }
+    window.addEventListener('hashchange', handleHashChange);
+
+    function getCfgFromForm() {
+      const tol = String(document.getElementById('validation_tolerance').value || '').trim();
+      return {
+        source_tool_id: String(document.getElementById('source_tool_id').value || '').trim(),
+        source_run_id: String(document.getElementById('source_run_id').value || '').trim(),
+        validation_tolerance: tol ? parseFloat(tol) : 0.01
+      };
+    }
+    function fillForm(cfg) {
+      document.getElementById('source_tool_id').value = cfg.source_tool_id || 'report_ingestor';
+      document.getElementById('source_run_id').value = cfg.source_run_id || '';
+      document.getElementById('validation_tolerance').value = (cfg.validation_tolerance != null ? cfg.validation_tolerance : 0.01);
+    }
+    async function reloadCfg() {
+      try { fillForm(await apiCall('/api/config')); } catch {}
+    }
+    async function saveCfg() {
+      const payload = getCfgFromForm();
+      try { fillForm(await apiCall('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })); } catch {}
+    }
+
+    function renderTable(headEl, bodyEl, rows, cols) {
+      const columns = cols && cols.length ? cols : (rows && rows.length ? Object.keys(rows[0]) : []);
+      headEl.innerHTML = '';
+      bodyEl.innerHTML = '';
+      if (!columns.length) return;
+      const trh = document.createElement('tr');
+      for (const c of columns) {
+        const th = document.createElement('th');
+        th.innerText = c;
+        trh.appendChild(th);
+      }
+      headEl.appendChild(trh);
+      for (const r of (rows || [])) {
+        const tr = document.createElement('tr');
+        for (const c of columns) {
+          const td = document.createElement('td');
+          const v = r && (c in r) ? r[c] : '';
+          td.innerText = v == null ? '' : String(v);
+          if (c === '差额') td.classList.add('num');
+          tr.appendChild(td);
+        }
+        bodyEl.appendChild(tr);
+      }
+    }
+
+    function _formatRunOptionLabel(run) {
+      const rid = String(run?.run_id || '').trim();
+      const status = String(run?.status || '').trim();
+      const ts = String(run?.finished_at || run?.started_at || '').trim();
+      const rows = (run?.cleaned_rows != null ? Number(run.cleaned_rows) : null);
+      const rowsTxt = (rows != null && !Number.isNaN(rows)) ? ` | ${rows} 行` : '';
+      const tsTxt = ts ? ` | ${ts}` : '';
+      const statusTxt = status ? ` | ${status}` : '';
+      return `${rid}${tsTxt}${statusTxt}${rowsTxt}`;
+    }
+    function _setRunOptions(sel, runs) {
+      sel.innerHTML = '';
+      const optAuto = document.createElement('option');
+      optAuto.value = '';
+      optAuto.innerText = '自动（最新）';
+      sel.appendChild(optAuto);
+      for (const r of (runs || [])) {
+        const rid = String(r?.run_id || '').trim();
+        if (!rid) continue;
+        const opt = document.createElement('option');
+        opt.value = rid;
+        opt.innerText = _formatRunOptionLabel(r);
+        sel.appendChild(opt);
+      }
+    }
+    function getSelectedRunId() {
+      const el = document.getElementById('viewRunId');
+      return String(el?.value || '').trim();
+    }
+    function setRunMeta(info) {
+      const el = document.getElementById('runMeta');
+      const rid = String(info?.run_id || '').trim();
+      const ts = String(info?.finished_at || info?.started_at || '').trim();
+      const status = String(info?.status || '').trim();
+      el.innerText = rid ? `当前：${rid}${ts ? ` | ${ts}` : ''}${status ? ` | ${status}` : ''}` : '';
+    }
+    async function loadRuns(force) {
+      const sel = document.getElementById('viewRunId');
+      const prev = String(sel?.value || '').trim();
+      let runs = [];
+      try {
+        const data = await apiCall('/api/runs?limit=200');
+        runs = data?.runs || [];
+      } catch {}
+      _setRunOptions(sel, runs);
+      let activeRunId = '';
+      let activeInfo = null;
+      try {
+        const active = await apiCall('/api/run/active');
+        activeInfo = active?.run || null;
+        activeRunId = String(activeInfo?.run_id || '').trim();
+      } catch {}
+      const validIds = new Set((runs || []).map(r => String(r?.run_id || '').trim()).filter(Boolean));
+      if (prev && validIds.has(prev)) sel.value = prev;
+      else if (activeRunId && validIds.has(activeRunId)) sel.value = activeRunId;
+      else sel.value = '';
+      setRunMeta(activeInfo);
+      if (force) {
+        const rid = getSelectedRunId();
+        if (rid) {
+          try { await apiCall('/api/run/select?run_id=' + encodeURIComponent(rid), { method: 'POST' }); } catch {}
+        }
+      }
+    }
+
+    async function loadValidationSummary() {
+      try {
+        const qs = new URLSearchParams();
+        const rid = getSelectedRunId();
+        if (rid) qs.set('run_id', rid);
+        const res = await apiCall('/api/validation/summary?' + qs.toString());
+        const tbody = document.getElementById('validationSummaryBody');
+        tbody.innerHTML = '';
+        if (res?.data && res.data.length) {
+          res.data.forEach(row => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${row['源文件'] || ''}</td><td>${row['期间'] || ''}</td><td>${row['验证项目'] || ''}</td>
+              <td>${row['总条数'] || 0}</td><td style="${row['不平衡条数'] > 0 ? 'color:var(--danger);font-weight:bold' : ''}">${row['不平衡条数'] || 0}</td>
+              <td>${row['最大差额'] != null ? Number(row['最大差额']).toFixed(2) : '-'}</td><td>${row['平均差额'] != null ? Number(row['平均差额']).toFixed(2) : '-'}</td>`;
+            tbody.appendChild(tr);
+          });
+        } else {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;">暂无数据</td></tr>';
+        }
+      } catch {}
+    }
+    async function queryValidation() {
+      const qs = new URLSearchParams();
+      const min = document.getElementById('vMinDiff').value.trim();
+      if (min) qs.set('min_diff', min);
+      const src = document.getElementById('vSourceFile').value.trim();
+      if (src) qs.set('source_file', src);
+      const bal = document.getElementById('vIsBalanced').value;
+      if (bal) qs.set('is_balanced', bal);
+      qs.set('limit', '200');
+      const rid = getSelectedRunId();
+      if (rid) qs.set('run_id', rid);
+      try {
+        const res = await apiCall('/api/validation/query?' + qs.toString());
+        const rows = res?.data || [];
+        const head = document.createElement('thead');
+        renderTable(head, document.getElementById('unbalancedBody'), rows, ['源文件', '来源Sheet', '期间', '时间属性', '差额', '验证结果']);
+      } catch {}
+    }
+    async function loadValidationDetail() {
+      const qs = new URLSearchParams();
+      qs.set('limit', '2000');
+      const rid = getSelectedRunId();
+      if (rid) qs.set('run_id', rid);
+      try {
+        const res = await apiCall('/api/validation/query?' + qs.toString());
+        renderTable(document.getElementById('tblHead'), document.getElementById('tblBody'), res?.data || [], ['源文件', '期间', '验证项目', '时间属性', '差额', '是否平衡', '验证结果']);
+      } catch {}
+    }
+    async function refreshResults() {
+      await loadRuns(false);
+      await loadValidationSummary();
+      await queryValidation();
+      await loadValidationDetail();
+    }
+
+    document.getElementById('btnReloadCfg').addEventListener('click', reloadCfg);
+    document.getElementById('btnSaveCfg').addEventListener('click', saveCfg);
+    document.getElementById('btnReloadRuns').addEventListener('click', () => refreshResults());
+    document.getElementById('viewRunId').addEventListener('change', async () => {
+      const rid = getSelectedRunId();
+      if (rid) {
+        try { await apiCall('/api/run/select?run_id=' + encodeURIComponent(rid), { method: 'POST' }); } catch {}
+      }
+      refreshResults();
+    });
+    document.getElementById('btnQueryValidation').addEventListener('click', queryValidation);
+
+    window.addEventListener('message', ev => {
+      if (ev.data && ev.data.type === 'fa.event') {
+        const { event, data } = ev.data;
+        if (event === 'done') {
+          const res = data.result || {};
+          document.getElementById('outValidation').innerText = res.validation_path || '';
+          document.getElementById('outSqlite').innerText = res.cleaned_sqlite_path || '';
+          renderTable(document.getElementById('tblHead'), document.getElementById('tblBody'), res.validation_preview || [], ['源文件', '期间', '验证项目', '差额', '是否平衡', '验证结果']);
+          refreshResults();
+        }
+      }
+    });
+
+    handleHashChange();
+    reloadCfg();
+  </script>
+</body>
+</html>

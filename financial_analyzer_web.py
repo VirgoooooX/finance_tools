@@ -11,7 +11,7 @@ import sqlite3
 
 import pandas as pd
 
-from fa_platform.paths import get_resource_path
+from fa_platform.paths import get_resource_path, ensure_dir as _ensure_dir, default_data_root as _default_data_root
 from fa_platform.jsonx import sanitize_json
 from fa_platform.webx import choose_web_port, read_web_index_html, sse_encode, get_tool_web_entry_url, get_tool_web_manifest
 
@@ -27,7 +27,6 @@ from financial_analyzer_core import (
     list_tools,
     get_tool_discovery_errors,
     resolve_tool_id,
-    _cleaned_sqlite_path_for,
     _get_logger,
     _list_excel_files,
 )
@@ -86,7 +85,6 @@ class _WebRunner:
         self.running = False
         self.current_progress: Dict[str, Any] = {"current": 0, "total": 1, "detail": ""}
         self._lock = threading.Lock()
-        self._cleaned_cache: Dict[str, Any] = {"path": None, "mtime": None, "df": None}
         self.active_tool_id: str = ""
         self.active_run_id_by_tool: Dict[str, str] = {}
 
@@ -317,89 +315,6 @@ class _WebRunner:
 
         return direct
 
-    def _get_cleaned_sqlite_path(self, tool_id: str = "", run_id: str = "") -> str:
-        with self._lock:
-            res = self.last_result
-        tid = self._normalize_tool_id(tool_id)
-        if res and getattr(res, "cleaned_sqlite_path", None) and (not tid or str(getattr(res, "tool_id", "") or "").strip() in ("", tid)):
-            return str(getattr(res, "cleaned_sqlite_path") or "")
-
-        rid = str(run_id or "").strip()
-        if not rid:
-            with self._lock:
-                rid = str(self.active_run_id_by_tool.get(tid, "") or "").strip()
-        if tid and rid:
-            try:
-                from fa_platform.run_index import get_run
-                info = get_run(tid, rid)
-                if info:
-                    sp = str(info.get("cleaned_sqlite_path") or "").strip()
-                    if sp:
-                        return sp
-            except Exception:
-                pass
-
-        xlsx_path = self._get_cleaned_path(tool_id=tid, run_id=rid)
-        guess = _cleaned_sqlite_path_for(xlsx_path) if xlsx_path else ""
-        if guess and os.path.exists(guess):
-            return guess
-
-        cfg = self.get_config(tool_id=tid)
-        base_dir = os.path.abspath(get_base_dir())
-        data_root = os.path.abspath(os.path.join(base_dir, "data"))
-        stem = os.path.splitext(str(cfg.output_basename or OUTPUT_PATH))[0] or "cleaned"
-        candidates: List[str] = []
-        try:
-            for name in os.listdir(data_root):
-                if not str(name).lower().endswith(".sqlite"):
-                    continue
-                if name == f"{stem}.sqlite" or name.startswith(f"{stem}_"):
-                    candidates.append(os.path.join(data_root, name))
-        except Exception:
-            candidates = []
-
-        if candidates:
-            candidates.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0.0, reverse=True)
-            return os.path.abspath(candidates[0])
-
-        return guess or ""
-
-    def _sqlite_is_available(self, tool_id: str = "", run_id: str = "") -> bool:
-        sp = self._get_cleaned_sqlite_path(tool_id=tool_id, run_id=run_id)
-        if not sp or not os.path.exists(sp):
-            return False
-        xp = self._get_cleaned_path(tool_id=tool_id, run_id=run_id)
-        if not xp or not os.path.exists(xp):
-            return True
-        try:
-            return float(os.path.getmtime(sp)) >= float(os.path.getmtime(xp))
-        except Exception:
-            return True
-
-    def load_cleaned_df(self, tool_id: str = "", run_id: str = "", force_reload: bool = False) -> pd.DataFrame:
-        path = self._get_cleaned_path(tool_id=tool_id, run_id=run_id)
-        if not path or not os.path.exists(path):
-            raise FileNotFoundError("清洗后的AI标准财务表不存在，请先运行生成")
-
-        mtime = None
-        try:
-            mtime = float(os.path.getmtime(path))
-        except Exception:
-            mtime = None
-
-        with self._lock:
-            cache_path = self._cleaned_cache.get("path")
-            cache_mtime = self._cleaned_cache.get("mtime")
-            cache_df = self._cleaned_cache.get("df")
-
-        if not force_reload and cache_df is not None and cache_path == path and cache_mtime == mtime:
-            return cache_df
-
-        df = pd.read_excel(path)
-        with self._lock:
-            self._cleaned_cache = {"path": path, "mtime": mtime, "df": df}
-        return df
-
 
 def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> int:
     try:
@@ -575,35 +490,141 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.get("/api/runs")
     def api_runs(tool_id: str = "", limit: int = 50) -> Dict[str, Any]:
-        from fa_platform.run_index import list_runs
         tid = runner._normalize_tool_id(tool_id)
-        return sanitize_json({"ok": True, "tool_id": tid, "runs": list_runs(tid, limit=limit)})
+        lim = int(max(1, min(int(limit or 50), 500)))
+        base_dir = os.path.abspath(get_base_dir())
+        sp = os.path.abspath(os.path.join(base_dir, "data", "warehouse.sqlite"))
+        if not sp or not os.path.exists(sp):
+            return sanitize_json({"ok": True, "tool_id": tid, "runs": []})
+
+        try:
+            with sqlite3.connect(sp) as conn:
+                if tid == "report_ingestor":
+                    try:
+                        cur = conn.execute(
+                            """
+                            SELECT batch_id, created_at, mode
+                            FROM import_batch
+                            WHERE tool_id = ?
+                            ORDER BY created_at DESC, batch_id DESC
+                            LIMIT ?
+                            """,
+                            (tid, lim),
+                        )
+                        rows = cur.fetchall() or []
+                    except Exception:
+                        rows = []
+                    runs = [
+                        {
+                            "tool_id": tid,
+                            "run_id": str(r[0] or "").strip(),
+                            "started_at": str(r[1] or "").strip(),
+                            "finished_at": str(r[1] or "").strip(),
+                            "status": str(r[2] or "ok").strip() or "ok",
+                            "cleaned_rows": 0,
+                            "processed_files": 0,
+                            "errors": [],
+                            "meta": {},
+                        }
+                        for r in rows
+                        if r and str(r[0] or "").strip()
+                    ]
+                    return sanitize_json({"ok": True, "tool_id": tid, "runs": runs})
+
+                if tid == "validation_report":
+                    try:
+                        cur = conn.execute(
+                            """
+                            SELECT DISTINCT source_run_id
+                            FROM warehouse_validation
+                            WHERE tool_id = ?
+                            ORDER BY source_run_id DESC
+                            LIMIT ?
+                            """,
+                            (tid, lim),
+                        )
+                        rows = cur.fetchall() or []
+                    except Exception:
+                        rows = []
+                    runs = [
+                        {
+                            "tool_id": tid,
+                            "run_id": str(r[0] or "").strip(),
+                            "started_at": str(r[0] or "").strip(),
+                            "finished_at": str(r[0] or "").strip(),
+                            "status": "ok",
+                            "cleaned_rows": 0,
+                            "processed_files": 0,
+                            "errors": [],
+                            "meta": {},
+                        }
+                        for r in rows
+                        if r and str(r[0] or "").strip()
+                    ]
+                    return sanitize_json({"ok": True, "tool_id": tid, "runs": runs})
+
+                if tid == "financial_metrics":
+                    try:
+                        cur = conn.execute(
+                            """
+                            SELECT DISTINCT source_run_id
+                            FROM warehouse_metrics
+                            WHERE tool_id = ?
+                            ORDER BY source_run_id DESC
+                            LIMIT ?
+                            """,
+                            (tid, lim),
+                        )
+                        rows = cur.fetchall() or []
+                    except Exception:
+                        rows = []
+                    runs = [
+                        {
+                            "tool_id": tid,
+                            "run_id": str(r[0] or "").strip(),
+                            "started_at": str(r[0] or "").strip(),
+                            "finished_at": str(r[0] or "").strip(),
+                            "status": "ok",
+                            "cleaned_rows": 0,
+                            "processed_files": 0,
+                            "errors": [],
+                            "meta": {},
+                        }
+                        for r in rows
+                        if r and str(r[0] or "").strip()
+                    ]
+                    return sanitize_json({"ok": True, "tool_id": tid, "runs": runs})
+        except Exception:
+            pass
+        return sanitize_json({"ok": True, "tool_id": tid, "runs": []})
 
     @app.get("/api/run/active")
     def api_run_active(tool_id: str = "") -> Dict[str, Any]:
-        from fa_platform.run_index import get_latest_run, get_run
         tid = runner._normalize_tool_id(tool_id)
         with runner._lock:
             rid = str(runner.active_run_id_by_tool.get(tid, "") or "").strip()
-        info = get_run(tid, rid) if tid and rid else None
-        if info is None and tid:
-            info = get_latest_run(tid)
-            if info:
+        if rid:
+            return sanitize_json({"ok": True, "tool_id": tid, "run": {"tool_id": tid, "run_id": rid}})
+        try:
+            data = api_runs(tool_id=tid, limit=1)
+            runs = data.get("runs") if isinstance(data, dict) else None
+            info = runs[0] if isinstance(runs, list) and runs else None
+            if info and info.get("run_id"):
                 with runner._lock:
                     runner.active_run_id_by_tool[tid] = str(info.get("run_id") or "").strip()
-        return sanitize_json({"ok": True, "tool_id": tid, "run": info})
+            return sanitize_json({"ok": True, "tool_id": tid, "run": info})
+        except Exception:
+            return sanitize_json({"ok": True, "tool_id": tid, "run": None})
 
     @app.post("/api/run/select")
     def api_run_select(tool_id: str = "", run_id: str = "") -> Dict[str, Any]:
-        from fa_platform.run_index import get_run
         tid = runner._normalize_tool_id(tool_id)
         rid = str(run_id or "").strip()
-        info = get_run(tid, rid) if tid and rid else None
-        if info:
+        if rid:
             with runner._lock:
                 runner.active_run_id_by_tool[tid] = rid
             return {"ok": True, "tool_id": tid, "run_id": rid}
-        return {"ok": False, "tool_id": tid, "run_id": rid, "message": "未找到该运行记录"}
+        return {"ok": False, "tool_id": tid, "run_id": rid, "message": "run_id 不能为空"}
 
     @app.get("/api/tools/{tool_id}/web")
     def api_tool_web(tool_id: str) -> Dict[str, Any]:
@@ -662,7 +683,8 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
         if not target.exists() or not target.is_file():
             return Response(status_code=404)
-        return FileResponse(str(target))
+        headers = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"}
+        return FileResponse(str(target), headers=headers)
 
     @app.post("/api/run/start")
     def api_start(tool_id: str = "") -> Dict[str, Any]:
@@ -682,64 +704,11 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     def api_cleaned_options(tool_id: str = "", run_id: str = "", force: int = 0) -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
         rid = str(run_id or "").strip()
-        if runner._sqlite_is_available(tool_id=tid, run_id=rid) and not bool(int(force or 0)):
-            sp = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
-            try:
-                conn = sqlite3.connect(sp, check_same_thread=False)
-                try:
-                    cols: List[str] = []
-                    try:
-                        cur = conn.execute("PRAGMA table_info(cleaned)")
-                        cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
-                    except Exception:
-                        cols = []
-
-                    opts: Dict[str, Any] = {"ok": True, "tool_id": tid, "run_id": rid, "columns": cols}
-                    for col in ["源文件", "日期", "报表类型", "大类", "时间属性"]:
-                        if cols and col not in cols:
-                            continue
-                        try:
-                            cur = conn.execute(
-                                f'SELECT DISTINCT "{col}" FROM cleaned WHERE "{col}" IS NOT NULL AND TRIM(CAST("{col}" AS TEXT)) <> \'\' ORDER BY "{col}" LIMIT 500'
-                            )
-                            vals = [str(r[0]) for r in cur.fetchall() if r and r[0] is not None and str(r[0]).strip() != ""]
-                            opts[col] = vals
-                        except Exception:
-                            pass
-                    try:
-                        cur = conn.execute("SELECT COUNT(*) FROM cleaned")
-                        row = cur.fetchone()
-                        opts["rows"] = int(row[0]) if row else 0
-                    except Exception:
-                        opts["rows"] = 0
-                    opts["path"] = runner._get_cleaned_path(tool_id=tid, run_id=rid)
-                    opts["sqlite"] = sp
-                    return sanitize_json(opts)
-                finally:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        try:
-            df = runner.load_cleaned_df(tool_id=tid, run_id=rid, force_reload=bool(int(force or 0)))
-        except Exception as e:
-            return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(tool_id=tid, run_id=rid), "rows": 0, "tool_id": tid, "run_id": rid}
-
-        opts: Dict[str, Any] = {"ok": True, "tool_id": tid, "run_id": rid, "columns": [str(c) for c in df.columns]}
-        for col in ["源文件", "日期", "报表类型", "大类", "时间属性"]:
-            if col in df.columns:
-                try:
-                    vals = df[col].dropna().astype(str).unique().tolist()
-                except Exception:
-                    vals = []
-                vals = [v for v in vals if str(v).strip() != ""]
-                vals.sort()
-                opts[col] = vals[:500]
-        opts["path"] = runner._get_cleaned_path(tool_id=tid, run_id=rid)
-        opts["rows"] = int(len(df))
-        return sanitize_json(opts)
+        out = api_warehouse_options(batch_id="")
+        if isinstance(out, dict):
+            out["tool_id"] = tid
+            out["run_id"] = rid
+        return sanitize_json(out)
 
     @app.get("/api/validation/query")
     def api_validation_query(
@@ -753,56 +722,80 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         offset: int = 0,
     ) -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
-        rid = str(run_id or "").strip()
-        db_path = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
-        if not os.path.exists(db_path):
-            return {"status": "error", "message": "Database file not found"}
+        bid = str(run_id or "").strip()
+        sp = _warehouse_path()
+        if not sp or not os.path.exists(sp):
+            return {"status": "error", "message": "累计库不存在，请先运行清洗落库"}
+        if not bid:
+            return {"status": "ok", "data": [], "total": 0}
+
+        lim = int(max(1, min(int(limit or 200), 5000)))
+        off = int(max(0, int(offset or 0)))
 
         try:
-            with sqlite3.connect(db_path) as conn:
-                # Check if validation table exists
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='validation'")
-                if not cursor.fetchone():
+            conn = sqlite3.connect(sp, check_same_thread=False)
+            try:
+                cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='warehouse_validation'")
+                if not cur.fetchone():
                     return {"status": "ok", "data": [], "total": 0}
 
-                where_clauses = []
-                params = []
+                try:
+                    cur = conn.execute("SELECT MAX(run_id) FROM warehouse_validation WHERE source_run_id = ?", (bid,))
+                    row = cur.fetchone()
+                    v_run_id = str(row[0] or "").strip() if row else ""
+                except Exception:
+                    v_run_id = ""
+                if not v_run_id:
+                    return {"status": "ok", "data": [], "total": 0}
+
+                where: List[str] = ["source_run_id = ?", "run_id = ?"]
+                params: List[Any] = [bid, v_run_id]
 
                 if min_diff is not None:
-                    where_clauses.append("CAST(差额 AS FLOAT) >= ?")
-                    params.append(min_diff)
-                
+                    where.append("差额 >= ?")
+                    params.append(float(min_diff))
                 if max_diff is not None:
-                    where_clauses.append("CAST(差额 AS FLOAT) <= ?")
-                    params.append(max_diff)
-
+                    where.append("差额 <= ?")
+                    params.append(float(max_diff))
                 if source_file:
-                    where_clauses.append("源文件 LIKE ?")
-                    params.append(f"%{source_file}%")
-
+                    where.append("源文件 LIKE ?")
+                    params.append(f"%{str(source_file).strip()}%")
                 if is_balanced:
-                    where_clauses.append("是否平衡 = ?")
-                    params.append(is_balanced)
-                else:
-                    # Default to showing only unbalanced if not specified? 
-                    # No, let frontend decide. But typically we query for exceptions.
+                    where.append("是否平衡 = ?")
+                    params.append(str(is_balanced).strip())
+
+                where_str = " AND ".join(where) if where else "1=1"
+                try:
+                    cur = conn.execute(f"SELECT COUNT(*) FROM warehouse_validation WHERE {where_str}", params)
+                    row = cur.fetchone()
+                    total = int(row[0]) if row else 0
+                except Exception:
+                    total = 0
+
+                sql = f"""
+                    SELECT 源文件, 来源Sheet, 期间, 验证项目, 时间属性, 差额, 是否平衡, 验证结果
+                    FROM warehouse_validation
+                    WHERE {where_str}
+                    ORDER BY ABS(COALESCE(差额, 0)) DESC
+                    LIMIT ? OFFSET ?
+                """
+                df = pd.read_sql_query(sql, conn, params=params + [lim, off])
+                return sanitize_json(
+                    {
+                        "status": "ok",
+                        "data": df.to_dict(orient="records"),
+                        "total": total,
+                        "tool_id": tid,
+                        "run_id": bid,
+                        "batch_id": bid,
+                        "validation_run_id": v_run_id,
+                    }
+                )
+            finally:
+                try:
+                    conn.close()
+                except Exception:
                     pass
-
-                where_str = " AND ".join(where_clauses) if where_clauses else "1=1"
-                
-                # Count total
-                count_sql = f"SELECT COUNT(*) FROM validation WHERE {where_str}"
-                cursor.execute(count_sql, params)
-                total = cursor.fetchone()[0]
-
-                # Query data
-                # Sort by difference descending by default
-                sql = f"SELECT * FROM validation WHERE {where_str} ORDER BY CAST(差额 AS FLOAT) DESC LIMIT ? OFFSET ?"
-                df = pd.read_sql_query(sql, conn, params=params + [limit, offset])
-                
-                records = df.to_dict(orient="records")
-                return {"status": "ok", "data": records, "total": total}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -810,38 +803,250 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     @app.get("/api/validation/summary")
     def api_validation_summary(tool_id: str = "", run_id: str = "") -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
-        rid = str(run_id or "").strip()
-        db_path = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
-        if not os.path.exists(db_path):
-            return {"status": "error", "message": "Database file not found"}
+        bid = str(run_id or "").strip()
+        sp = _warehouse_path()
+        if not sp or not os.path.exists(sp):
+            return {"status": "error", "message": "累计库不存在，请先运行清洗落库"}
+        if not bid:
+            return {"status": "ok", "data": []}
 
         try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='validation'")
-                if not cursor.fetchone():
+            conn = sqlite3.connect(sp, check_same_thread=False)
+            try:
+                cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='warehouse_validation'")
+                if not cur.fetchone():
                     return {"status": "ok", "data": []}
 
-                # Aggregate query matching the Excel logic
-                # Group by 源文件, 日期, 验证项目
+                try:
+                    cur = conn.execute("SELECT MAX(run_id) FROM warehouse_validation WHERE source_run_id = ?", (bid,))
+                    row = cur.fetchone()
+                    v_run_id = str(row[0] or "").strip() if row else ""
+                except Exception:
+                    v_run_id = ""
+                if not v_run_id:
+                    return {"status": "ok", "data": []}
+
                 sql = """
-                    SELECT 
-                        源文件, 
-                        日期, 
-                        验证项目, 
+                    SELECT
+                        源文件,
+                        期间,
+                        验证项目,
                         COUNT(*) as 总条数,
                         SUM(CASE WHEN 是否平衡 = '否' THEN 1 ELSE 0 END) as 不平衡条数,
-                        MAX(CAST(差额 AS FLOAT)) as 最大差额,
-                        AVG(CAST(差额 AS FLOAT)) as 平均差额
-                    FROM validation
-                    GROUP BY 源文件, 日期, 验证项目
+                        MAX(ABS(COALESCE(差额, 0))) as 最大差额,
+                        AVG(ABS(COALESCE(差额, 0))) as 平均差额
+                    FROM warehouse_validation
+                    WHERE source_run_id = ? AND run_id = ?
+                    GROUP BY 源文件, 期间, 验证项目
                     ORDER BY 不平衡条数 DESC, 最大差额 DESC
                 """
-                df = pd.read_sql_query(sql, conn)
-                records = df.to_dict(orient="records")
-                return {"status": "ok", "data": records}
+                df = pd.read_sql_query(sql, conn, params=[bid, v_run_id])
+                return sanitize_json({"status": "ok", "data": df.to_dict(orient="records"), "tool_id": tid, "run_id": bid, "batch_id": bid, "validation_run_id": v_run_id})
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+
+    @app.get("/api/metrics/summary")
+    def api_metrics_summary(tool_id: str = "", run_id: str = "") -> Dict[str, Any]:
+        tid = runner._normalize_tool_id(tool_id)
+        bid = str(run_id or "").strip()
+        sp = _warehouse_path()
+        if not sp or not os.path.exists(sp):
+            return {"ok": False, "message": "累计库不存在，请先运行清洗落库", "tool_id": tid, "run_id": bid, "path": sp}
+        if not bid:
+            return {"ok": True, "tool_id": tid, "run_id": bid, "path": sp, "rows": 0, "columns": [], "metric_columns": []}
+
+        try:
+            import json as _json
+            conn = sqlite3.connect(sp, check_same_thread=False)
+            try:
+                cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='warehouse_metrics'")
+                if not cur.fetchone():
+                    return {"ok": True, "tool_id": tid, "run_id": bid, "path": sp, "rows": 0, "columns": [], "metric_columns": []}
+
+                try:
+                    cur = conn.execute("SELECT MAX(run_id) FROM warehouse_metrics WHERE source_run_id = ?", (bid,))
+                    row = cur.fetchone()
+                    m_run_id = str(row[0] or "").strip() if row else ""
+                except Exception:
+                    m_run_id = ""
+                if not m_run_id:
+                    return {"ok": True, "tool_id": tid, "run_id": bid, "path": sp, "rows": 0, "columns": [], "metric_columns": []}
+
+                try:
+                    cur = conn.execute("SELECT COUNT(*) FROM warehouse_metrics WHERE source_run_id = ? AND run_id = ?", (bid, m_run_id))
+                    row = cur.fetchone()
+                    rows = int(row[0]) if row else 0
+                except Exception:
+                    rows = 0
+
+                metric_keys: set = set()
+                try:
+                    cur = conn.execute(
+                        "SELECT metrics_json FROM warehouse_metrics WHERE source_run_id = ? AND run_id = ? LIMIT 2000",
+                        (bid, m_run_id),
+                    )
+                    samples = cur.fetchall() or []
+                except Exception:
+                    samples = []
+                for r in samples:
+                    raw = str(r[0] or "").strip() if r else ""
+                    if not raw:
+                        continue
+                    try:
+                        obj = _json.loads(raw)
+                    except Exception:
+                        obj = None
+                    if isinstance(obj, dict):
+                        for k in obj.keys():
+                            kk = str(k).strip()
+                            if kk:
+                                metric_keys.add(kk)
+
+                metric_cols = sorted(metric_keys)
+                cols = ["源文件", "期间"] + metric_cols
+                return sanitize_json({"ok": True, "tool_id": tid, "run_id": bid, "batch_id": bid, "metrics_run_id": m_run_id, "path": sp, "rows": rows, "columns": cols, "metric_columns": metric_cols})
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            return {"ok": False, "message": str(e), "tool_id": tid, "run_id": bid, "path": sp}
+
+
+    @app.get("/api/metrics/query")
+    def api_metrics_query(
+        tool_id: str = "",
+        run_id: str = "",
+        source_file: str = "",
+        period: str = "",
+        sort_by: str = "",
+        sort_dir: str = "desc",
+        limit: int = 200,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        tid = runner._normalize_tool_id(tool_id)
+        bid = str(run_id or "").strip()
+        sp = _warehouse_path()
+        lim = int(max(1, min(int(limit or 200), 5000)))
+        off = int(max(0, int(offset or 0)))
+        s_dir = "asc" if str(sort_dir or "").lower() == "asc" else "desc"
+
+        if not sp or not os.path.exists(sp):
+            return {"ok": False, "message": "累计库不存在，请先运行清洗落库", "tool_id": tid, "run_id": bid, "path": sp, "total": 0, "limit": lim, "offset": off, "rows": [], "columns": []}
+        if not bid:
+            return {"ok": True, "tool_id": tid, "run_id": bid, "path": sp, "total": 0, "limit": lim, "offset": off, "rows": [], "columns": []}
+
+        try:
+            import json as _json
+            conn = sqlite3.connect(sp, check_same_thread=False)
+            try:
+                cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='warehouse_metrics'")
+                if not cur.fetchone():
+                    return {"ok": True, "tool_id": tid, "run_id": bid, "path": sp, "total": 0, "limit": lim, "offset": off, "rows": [], "columns": []}
+
+                try:
+                    cur = conn.execute("SELECT MAX(run_id) FROM warehouse_metrics WHERE source_run_id = ?", (bid,))
+                    row = cur.fetchone()
+                    m_run_id = str(row[0] or "").strip() if row else ""
+                except Exception:
+                    m_run_id = ""
+                if not m_run_id:
+                    return {"ok": True, "tool_id": tid, "run_id": bid, "path": sp, "total": 0, "limit": lim, "offset": off, "rows": [], "columns": []}
+
+                where: List[str] = ["source_run_id = ?", "run_id = ?"]
+                params: List[Any] = [bid, m_run_id]
+                if source_file:
+                    where.append("源文件 LIKE ?")
+                    params.append(f"%{str(source_file).strip()}%")
+                if period:
+                    where.append("期间 = ?")
+                    params.append(str(period).strip())
+                where_str = " AND ".join(where) if where else "1=1"
+
+                try:
+                    cur = conn.execute(f"SELECT COUNT(*) FROM warehouse_metrics WHERE {where_str}", params)
+                    row = cur.fetchone()
+                    total = int(row[0]) if row else 0
+                except Exception:
+                    total = 0
+
+                try:
+                    cur = conn.execute(f"SELECT 源文件, 期间, metrics_json FROM warehouse_metrics WHERE {where_str}", params)
+                    raw_rows = cur.fetchall() or []
+                except Exception:
+                    raw_rows = []
+
+                expanded: List[Dict[str, Any]] = []
+                metric_keys: set = set()
+                for r in raw_rows:
+                    if not r or len(r) < 3:
+                        continue
+                    rec: Dict[str, Any] = {"源文件": r[0], "期间": r[1]}
+                    mj = str(r[2] or "").strip()
+                    if mj:
+                        try:
+                            obj = _json.loads(mj)
+                        except Exception:
+                            obj = None
+                        if isinstance(obj, dict):
+                            for k, v in obj.items():
+                                kk = str(k).strip()
+                                if not kk:
+                                    continue
+                                metric_keys.add(kk)
+                                rec[kk] = v
+                    expanded.append(rec)
+
+                cols = ["源文件", "期间"] + sorted(metric_keys)
+
+                def _to_float(v: Any) -> Optional[float]:
+                    if v is None:
+                        return None
+                    if isinstance(v, (int, float)):
+                        try:
+                            return float(v)
+                        except Exception:
+                            return None
+                    s = str(v).strip()
+                    if not s:
+                        return None
+                    try:
+                        return float(s)
+                    except Exception:
+                        return None
+
+                s_col = str(sort_by or "").strip()
+                if s_col and s_col not in set(cols):
+                    s_col = ""
+
+                if s_col:
+                    if s_col in {"源文件", "期间"}:
+                        expanded.sort(key=lambda x: str(x.get(s_col, "") or ""), reverse=(s_dir == "desc"))
+                    else:
+                        expanded.sort(
+                            key=lambda x: (_to_float(x.get(s_col)) is None, _to_float(x.get(s_col)) if _to_float(x.get(s_col)) is not None else 0.0),
+                            reverse=(s_dir == "desc"),
+                        )
+                else:
+                    if "期间" in set(cols) and "源文件" in set(cols):
+                        expanded.sort(key=lambda x: (str(x.get("期间", "") or ""), str(x.get("源文件", "") or "")), reverse=True)
+
+                page = expanded[off : off + lim]
+                return sanitize_json({"ok": True, "tool_id": tid, "run_id": bid, "batch_id": bid, "metrics_run_id": m_run_id, "path": sp, "total": total, "limit": lim, "offset": off, "rows": page, "columns": cols, "sort_by": s_col, "sort_dir": s_dir})
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            return {"ok": False, "message": str(e), "tool_id": tid, "run_id": bid, "path": sp, "total": 0, "limit": lim, "offset": off, "rows": [], "columns": []}
 
 
     @app.get("/api/cleaned/query")
@@ -851,7 +1056,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         q: str = "",
         subject: str = "",
         source_file: str = "",
-        date: str = "",
+        period: str = "",
         report_type: str = "",
         category: str = "",
         time_attr: str = "",
@@ -866,225 +1071,28 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     ) -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
         rid = str(run_id or "").strip()
-        if runner._sqlite_is_available(tool_id=tid, run_id=rid):
-            sp = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
-            try:
-                conn = sqlite3.connect(sp, check_same_thread=False)
-                try:
-                    cols: List[str] = []
-                    try:
-                        cur = conn.execute("PRAGMA table_info(cleaned)")
-                        cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
-                    except Exception:
-                        cols = []
-                    allowed_cols = set(cols) if cols else {"源文件", "日期", "报表类型", "大类", "科目", "时间属性", "金额", "来源Sheet"}
-                    where: List[str] = []
-                    params: List[Any] = []
-
-                    def add_eq(col: str, val: str) -> None:
-                        if val is None:
-                            return
-                        v = str(val).strip()
-                        if not v:
-                            return
-                        where.append(f'"{col}" = ?')
-                        params.append(v)
-
-                    add_eq("源文件", source_file)
-                    add_eq("日期", date)
-                    add_eq("报表类型", report_type)
-                    add_eq("大类", category)
-                    add_eq("时间属性", time_attr)
-
-                    kw_input = (subject or q or "").strip()
-                    if kw_input and ("科目" in allowed_cols):
-                        import re
-                        keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
-                        if keywords:
-                            or_clauses = []
-                            for k in keywords:
-                                or_clauses.append('LOWER(CAST("科目" AS TEXT)) LIKE ?')
-                                params.append(f"%{k.lower()}%")
-                            if or_clauses:
-                                where.append(f"({' OR '.join(or_clauses)})")
-
-                    if min_amount is not None:
-                        try:
-                            if "金额" in allowed_cols:
-                                where.append('"金额" >= ?')
-                                params.append(float(min_amount))
-                        except Exception:
-                            pass
-                    if max_amount is not None:
-                        try:
-                            if "金额" in allowed_cols:
-                                where.append('"金额" <= ?')
-                                params.append(float(max_amount))
-                        except Exception:
-                            pass
-
-                    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-                    
-                    s_col = str(sort_by or "").strip()
-                    s_dir = str(sort_dir or "").strip().lower()
-                    
-                    g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in allowed_cols]
-                    
-                    if g_cols:
-                        g_str = ", ".join([f'"{c}"' for c in g_cols])
-                        base_sql = f'SELECT {g_str}, SUM("金额") as "金额", COUNT(*) as "条数" FROM cleaned' + where_sql + f' GROUP BY {g_str}'
-                        count_sql = f'SELECT COUNT(*) FROM (SELECT {g_str} FROM cleaned {where_sql} GROUP BY {g_str})'
-                        
-                        order_sql = ""
-                        if s_col == "金额":
-                            order_sql = f' ORDER BY SUM("金额") {"ASC" if s_dir == "asc" else "DESC"}'
-                        elif s_col == "条数":
-                            order_sql = f' ORDER BY COUNT(*) {"ASC" if s_dir == "asc" else "DESC"}'
-                        elif s_col in allowed_cols:
-                            order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
-                    else:
-                        base_sql = "SELECT * FROM cleaned" + where_sql
-                        count_sql = "SELECT COUNT(*) FROM cleaned" + where_sql
-                        order_sql = ""
-                        if s_col in allowed_cols:
-                            order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
-
-                    total = 0
-                    try:
-                        cur = conn.execute(count_sql, params)
-                        row = cur.fetchone()
-                        total = int(row[0]) if row else 0
-                    except Exception:
-                        total = 0
-
-                    lim = int(max(1, min(int(limit or 200), 2000)))
-                    if topn is not None:
-                        try:
-                            lim = int(max(1, min(int(topn), 2000)))
-                        except Exception:
-                            pass
-                        offset = 0
-                    off = int(max(0, int(offset or 0)))
-                    rows: List[Dict[str, Any]] = []
-                    try:
-                        final_sql = base_sql + order_sql + " LIMIT ? OFFSET ?"
-                        cur = conn.execute(final_sql, params + [lim, off])
-                        cols = [d[0] for d in (cur.description or [])]
-                        fetched = cur.fetchall()
-                        rows = [dict(zip(cols, r)) for r in fetched]
-                    except Exception:
-                        rows = []
-
-                    return sanitize_json(
-                        {
-                            "ok": True,
-                            "tool_id": tid,
-                            "run_id": rid,
-                            "path": runner._get_cleaned_path(tool_id=tid, run_id=rid),
-                            "sqlite": sp,
-                            "total": int(total),
-                            "limit": lim,
-                            "offset": off,
-                            "rows": rows,
-                            "sort_by": s_col,
-                            "sort_dir": "asc" if s_dir == "asc" else "desc",
-                        }
-                    )
-                finally:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-            except Exception as e:
-                return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(tool_id=tid, run_id=rid), "tool_id": tid, "run_id": rid, "total": 0, "limit": 0, "offset": 0, "rows": []}
-        try:
-            df = runner.load_cleaned_df(tool_id=tid, run_id=rid, force_reload=False)
-        except Exception as e:
-            return {"ok": False, "message": str(e), "path": runner._get_cleaned_path(tool_id=tid, run_id=rid), "tool_id": tid, "run_id": rid, "total": 0, "limit": 0, "offset": 0, "rows": []}
-        view = df
-
-        def _filt_eq(col: str, val: str) -> None:
-            nonlocal view
-            if not val:
-                return
-            if col in view.columns:
-                view = view[view[col].astype(str) == str(val)]
-
-        _filt_eq("源文件", source_file)
-        _filt_eq("日期", date)
-        _filt_eq("报表类型", report_type)
-        _filt_eq("大类", category)
-        _filt_eq("时间属性", time_attr)
-
-        kw_input = (subject or q or "").strip()
-        if kw_input and "科目" in view.columns:
-            import re
-            keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
-            if keywords:
-                # pandas multiple contains logic (OR)
-                # escape regex chars just in case, though user likely inputs plain text
-                pattern = "|".join([re.escape(k) for k in keywords])
-                view = view[view["科目"].astype(str).str.contains(pattern, case=False, na=False)]
-
-        if min_amount is not None and "金额" in view.columns:
-            try:
-                view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) >= float(min_amount)]
-            except Exception:
-                pass
-        if max_amount is not None and "金额" in view.columns:
-            try:
-                view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) <= float(max_amount)]
-            except Exception:
-                pass
-        
-        g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in view.columns]
-        if g_cols:
-            try:
-                # Group by
-                view = view.assign(
-                    金额=pd.to_numeric(view["金额"], errors="coerce").fillna(0)
-                ).groupby(g_cols).agg(
-                    金额=("金额", "sum"),
-                    条数=("金额", "count")
-                ).reset_index()
-            except Exception:
-                pass
-
-        s_col = str(sort_by or "").strip()
-        s_dir = str(sort_dir or "").strip().lower()
-        if s_col and s_col in view.columns:
-            ascending = True if s_dir == "asc" else False
-            try:
-                if s_col == "金额":
-                    view = view.assign(__amt=pd.to_numeric(view["金额"], errors="coerce").fillna(0)).sort_values("__amt", ascending=ascending).drop(columns=["__amt"])
-                else:
-                    view = view.sort_values(s_col, ascending=ascending)
-            except Exception:
-                pass
-
-        total = int(len(view))
-        lim = int(max(1, min(int(limit or 200), 2000)))
-        if topn is not None:
-            try:
-                lim = int(max(1, min(int(topn), 2000)))
-            except Exception:
-                pass
-            offset = 0
-        off = int(max(0, int(offset or 0)))
-        page = view.iloc[off : off + lim].copy()
-        records = page.to_dict(orient="records")
-        return sanitize_json({
-            "ok": True,
-            "tool_id": tid,
-            "run_id": rid,
-            "path": runner._get_cleaned_path(tool_id=tid, run_id=rid),
-            "total": total,
-            "limit": lim,
-            "offset": off,
-            "rows": records,
-            "sort_by": s_col,
-            "sort_dir": "asc" if s_dir == "asc" else "desc",
-        })
+        out = api_warehouse_query(
+            batch_id="",
+            q=q,
+            subject=subject,
+            source_file=source_file,
+            report_type=report_type,
+            category=category,
+            time_attr=time_attr,
+            period=period,
+            min_amount=min_amount,
+            max_amount=max_amount,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            topn=topn,
+            limit=limit,
+            offset=offset,
+            group_by=group_by,
+        )
+        if isinstance(out, dict):
+            out["tool_id"] = tid
+            out["run_id"] = rid
+        return sanitize_json(out)
 
     @app.get("/api/cleaned/export")
     def api_cleaned_export(
@@ -1093,7 +1101,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         q: str = "",
         subject: str = "",
         source_file: str = "",
-        date: str = "",
+        period: str = "",
         report_type: str = "",
         category: str = "",
         time_attr: str = "",
@@ -1105,206 +1113,492 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         group_by: str = "",
         format: str = "csv",
     ):
+        rid = str(run_id or "").strip()
+        return api_warehouse_export(
+            batch_id="",
+            q=q,
+            subject=subject,
+            source_file=source_file,
+            report_type=report_type,
+            category=category,
+            time_attr=time_attr,
+            period=period,
+            min_amount=min_amount,
+            max_amount=max_amount,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            topn=topn,
+            group_by=group_by,
+            format=format,
+        )
+
+    def _warehouse_path() -> str:
+        base_dir = os.path.abspath(get_base_dir())
+        return os.path.abspath(os.path.join(base_dir, "data", "warehouse.sqlite"))
+
+    def _normalize_subject_text(text: Any) -> str:
+        s = str(text or "").strip().lower()
+        s = s.replace("（", "(").replace("）", ")")
+        import re as _re
+        s = _re.sub(r"[\s,，]", "", s)
+        return s
+
+    @app.get("/api/warehouse/options")
+    def api_warehouse_options(batch_id: str = "") -> Dict[str, Any]:
+        sp = _warehouse_path()
+        if not sp or not os.path.exists(sp):
+            return {"ok": False, "message": "累计库不存在，请先运行清洗落库", "path": sp, "rows": 0}
+        bid = str(batch_id or "").strip()
+        try:
+            conn = sqlite3.connect(sp, check_same_thread=False)
+            try:
+                cols: List[str] = []
+                try:
+                    cur = conn.execute("PRAGMA table_info(warehouse_cleaned)")
+                    cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
+                except Exception:
+                    cols = []
+
+                exclude_cols = {"日期", "金额文本", "值状态"}
+                cols = [c for c in cols if c not in exclude_cols]
+                out: Dict[str, Any] = {"ok": True, "path": sp, "columns": cols}
+                try:
+                    if bid:
+                        cur = conn.execute("SELECT COUNT(*) FROM warehouse_cleaned WHERE batch_id = ?", (bid,))
+                        out["batch_id"] = bid
+                    else:
+                        cur = conn.execute("SELECT COUNT(*) FROM warehouse_cleaned")
+                    row = cur.fetchone()
+                    out["rows"] = int(row[0]) if row else 0
+                except Exception:
+                    out["rows"] = 0
+
+                for col in ["源文件", "报表类型", "大类", "时间属性", "期间", "年份", "报表口径"]:
+                    if cols and col not in cols:
+                        continue
+                    try:
+                        if bid:
+                            cur = conn.execute(
+                                f'SELECT DISTINCT "{col}" FROM warehouse_cleaned WHERE batch_id = ? AND "{col}" IS NOT NULL AND TRIM(CAST("{col}" AS TEXT)) <> \'\' ORDER BY "{col}" LIMIT 500',
+                                (bid,),
+                            )
+                        else:
+                            cur = conn.execute(
+                                f'SELECT DISTINCT "{col}" FROM warehouse_cleaned WHERE "{col}" IS NOT NULL AND TRIM(CAST("{col}" AS TEXT)) <> \'\' ORDER BY "{col}" LIMIT 500'
+                            )
+                        out[col] = [r[0] for r in (cur.fetchall() or []) if r and r[0] is not None]
+                    except Exception:
+                        out[col] = []
+                return sanitize_json(out)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            return {"ok": False, "message": str(e), "path": sp, "rows": 0}
+
+    @app.get("/api/warehouse/summary")
+    def api_warehouse_summary(batch_id: str = "") -> Dict[str, Any]:
+        sp = _warehouse_path()
+        if not sp or not os.path.exists(sp):
+            return {"ok": False, "message": "累计库不存在，请先运行清洗落库", "path": sp}
+        bid = str(batch_id or "").strip()
+        try:
+            conn = sqlite3.connect(sp, check_same_thread=False)
+            try:
+                out: Dict[str, Any] = {"ok": True, "path": sp}
+                try:
+                    if bid:
+                        cur = conn.execute("SELECT COUNT(*) FROM warehouse_cleaned WHERE batch_id = ?", (bid,))
+                        out["batch_id"] = bid
+                    else:
+                        cur = conn.execute("SELECT COUNT(*) FROM warehouse_cleaned")
+                    row = cur.fetchone()
+                    out["rows"] = int(row[0]) if row else 0
+                except Exception:
+                    out["rows"] = 0
+
+                try:
+                    if bid:
+                        cur = conn.execute(
+                            """
+                            SELECT
+                              MIN(期间) as min_period,
+                              MAX(期间) as max_period
+                            FROM warehouse_cleaned
+                            WHERE batch_id = ?
+                              AND 期间 IS NOT NULL
+                              AND TRIM(CAST(期间 AS TEXT)) <> ''
+                              AND LENGTH(TRIM(CAST(期间 AS TEXT))) = 6
+                            """,
+                            (bid,),
+                        )
+                    else:
+                        cur = conn.execute(
+                            """
+                            SELECT
+                              MIN(期间) as min_period,
+                              MAX(期间) as max_period
+                            FROM warehouse_cleaned
+                            WHERE 期间 IS NOT NULL
+                              AND TRIM(CAST(期间 AS TEXT)) <> ''
+                              AND LENGTH(TRIM(CAST(期间 AS TEXT))) = 6
+                            """
+                        )
+                    row = cur.fetchone()
+                    if row:
+                        out["earliest_period"] = str(row[0] or "").strip()
+                        out["latest_period"] = str(row[1] or "").strip()
+                except Exception:
+                    pass
+
+                try:
+                    if bid:
+                        cur = conn.execute("SELECT created_at FROM import_batch WHERE batch_id = ? LIMIT 1", (bid,))
+                        row = cur.fetchone()
+                        out["latest_imported_at"] = str(row[0] or "").strip() if row else ""
+                    else:
+                        cur = conn.execute("SELECT MAX(created_at) FROM import_batch")
+                        row = cur.fetchone()
+                        out["latest_imported_at"] = str(row[0] or "").strip() if row else ""
+                except Exception:
+                    out["latest_imported_at"] = ""
+
+                return sanitize_json(out)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            return {"ok": False, "message": str(e), "path": sp}
+
+    @app.get("/api/warehouse/query")
+    def api_warehouse_query(
+        batch_id: str = "",
+        q: str = "",
+        subject: str = "",
+        source_file: str = "",
+        report_type: str = "",
+        category: str = "",
+        time_attr: str = "",
+        period: str = "",
+        year: str = "",
+        caliber: str = "",
+        min_amount: Optional[float] = None,
+        max_amount: Optional[float] = None,
+        sort_by: str = "金额",
+        sort_dir: str = "desc",
+        topn: Optional[int] = None,
+        limit: int = 200,
+        offset: int = 0,
+        group_by: str = "",
+    ) -> Dict[str, Any]:
+        sp = _warehouse_path()
+        if not sp or not os.path.exists(sp):
+            return {"ok": False, "message": "累计库不存在，请先运行清洗落库", "path": sp, "total": 0, "limit": 0, "offset": 0, "rows": []}
+        try:
+            conn = sqlite3.connect(sp, check_same_thread=False)
+            try:
+                cols: List[str] = []
+                try:
+                    cur = conn.execute("PRAGMA table_info(warehouse_cleaned)")
+                    cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
+                except Exception:
+                    cols = []
+                cols = [c for c in cols if c not in {"日期", "金额文本", "值状态"}]
+                allowed_cols = set(cols) if cols else {
+                    "源文件", "来源Sheet", "期间", "年份", "报表口径", "报表类型", "大类", "科目", "科目规范", "时间属性", "金额"
+                }
+
+                where: List[str] = []
+                params: List[Any] = []
+
+                def add_eq(col: str, val: str) -> None:
+                    if val is None:
+                        return
+                    v = str(val).strip()
+                    if not v:
+                        return
+                    if col not in allowed_cols:
+                        return
+                    where.append(f'"{col}" = ?')
+                    params.append(v)
+
+                add_eq("batch_id", batch_id)
+                add_eq("源文件", source_file)
+                add_eq("报表类型", report_type)
+                add_eq("大类", category)
+                add_eq("时间属性", time_attr)
+                add_eq("期间", period)
+                add_eq("年份", year)
+                add_eq("报表口径", caliber)
+
+                kw_input = (subject or q or "").strip()
+                if kw_input:
+                    import re
+                    keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
+                    if keywords:
+                        or_clauses: List[str] = []
+                        for k in keywords:
+                            k_norm = _normalize_subject_text(k)
+                            if k_norm and "科目规范" in allowed_cols:
+                                or_clauses.append('LOWER(CAST("科目规范" AS TEXT)) LIKE ?')
+                                params.append(f"%{k_norm.lower()}%")
+                            if "科目" in allowed_cols:
+                                or_clauses.append('LOWER(CAST("科目" AS TEXT)) LIKE ?')
+                                params.append(f"%{k.lower()}%")
+                        if or_clauses:
+                            where.append(f"({' OR '.join(or_clauses)})")
+
+                if min_amount is not None and "金额" in allowed_cols:
+                    try:
+                        where.append('"金额" >= ?')
+                        params.append(float(min_amount))
+                    except Exception:
+                        pass
+                if max_amount is not None and "金额" in allowed_cols:
+                    try:
+                        where.append('"金额" <= ?')
+                        params.append(float(max_amount))
+                    except Exception:
+                        pass
+
+                where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+                s_col = str(sort_by or "").strip()
+                s_dir = str(sort_dir or "").strip().lower()
+                g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in allowed_cols]
+
+                if g_cols:
+                    g_str = ", ".join([f'"{c}"' for c in g_cols])
+                    base_sql = f'SELECT {g_str}, SUM("金额") as "金额", COUNT(*) as "条数" FROM warehouse_cleaned' + where_sql + f' GROUP BY {g_str}'
+                    count_sql = f'SELECT COUNT(*) FROM (SELECT {g_str} FROM warehouse_cleaned {where_sql} GROUP BY {g_str})'
+                    order_sql = ""
+                    if s_col == "金额":
+                        order_sql = f' ORDER BY SUM("金额") {"ASC" if s_dir == "asc" else "DESC"}'
+                    elif s_col == "条数":
+                        order_sql = f' ORDER BY COUNT(*) {"ASC" if s_dir == "asc" else "DESC"}'
+                    elif s_col in allowed_cols:
+                        order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
+                else:
+                    if cols:
+                        select_list = ", ".join([f'"{c}"' for c in cols])
+                    else:
+                        select_list = "*"
+                    base_sql = f"SELECT {select_list} FROM warehouse_cleaned" + where_sql
+                    count_sql = "SELECT COUNT(*) FROM warehouse_cleaned" + where_sql
+                    order_sql = ""
+                    if s_col in allowed_cols:
+                        order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
+
+                total = 0
+                try:
+                    cur = conn.execute(count_sql, params)
+                    row = cur.fetchone()
+                    total = int(row[0]) if row else 0
+                except Exception:
+                    total = 0
+
+                lim = int(max(1, min(int(limit or 200), 2000)))
+                if topn is not None:
+                    try:
+                        lim = int(max(1, min(int(topn), 2000)))
+                    except Exception:
+                        pass
+                    offset = 0
+                off = int(max(0, int(offset or 0)))
+
+                rows: List[Dict[str, Any]] = []
+                try:
+                    final_sql = base_sql + order_sql + " LIMIT ? OFFSET ?"
+                    cur = conn.execute(final_sql, params + [lim, off])
+                    out_cols = [d[0] for d in (cur.description or [])]
+                    fetched = cur.fetchall()
+                    rows = [dict(zip(out_cols, r)) for r in fetched]
+                except Exception:
+                    rows = []
+
+                return sanitize_json(
+                    {
+                        "ok": True,
+                        "path": sp,
+                        "sqlite": sp,
+                        "total": int(total),
+                        "limit": lim,
+                        "offset": off,
+                        "rows": rows,
+                        "sort_by": s_col,
+                        "sort_dir": "asc" if s_dir == "asc" else "desc",
+                    }
+                )
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            return {"ok": False, "message": str(e), "path": sp, "total": 0, "limit": 0, "offset": 0, "rows": []}
+
+    @app.get("/api/warehouse/export")
+    def api_warehouse_export(
+        batch_id: str = "",
+        q: str = "",
+        subject: str = "",
+        source_file: str = "",
+        report_type: str = "",
+        category: str = "",
+        time_attr: str = "",
+        period: str = "",
+        year: str = "",
+        caliber: str = "",
+        min_amount: Optional[float] = None,
+        max_amount: Optional[float] = None,
+        sort_by: str = "金额",
+        sort_dir: str = "desc",
+        topn: Optional[int] = None,
+        group_by: str = "",
+        format: str = "csv",
+    ):
         import io, csv
+        sp = _warehouse_path()
+        if not sp or not os.path.exists(sp):
+            return Response("累计库不存在，请先运行清洗落库", media_type="text/plain", status_code=404)
         is_xlsx = (format or "").lower() == "xlsx"
         ext = "xlsx" if is_xlsx else "csv"
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if is_xlsx else "text/csv"
-        filename = f"cleaned_export.{ext}"
+        filename = f"warehouse_export.{ext}"
 
-        tid = runner._normalize_tool_id(tool_id)
-        rid = str(run_id or "").strip()
-
-        if runner._sqlite_is_available(tool_id=tid, run_id=rid):
-            sp = runner._get_cleaned_sqlite_path(tool_id=tid, run_id=rid)
+        try:
+            conn = sqlite3.connect(sp, check_same_thread=False)
             try:
-                conn = sqlite3.connect(sp, check_same_thread=False)
+                cols: List[str] = []
                 try:
-                    cols: List[str] = []
-                    try:
-                        cur = conn.execute("PRAGMA table_info(cleaned)")
-                        cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
-                    except Exception:
-                        cols = []
-                    allowed_cols = set(cols) if cols else {"源文件", "日期", "报表类型", "大类", "科目", "时间属性", "金额", "来源Sheet"}
-                    where: List[str] = []
-                    params: List[Any] = []
-                    def add_eq(col: str, val: str) -> None:
-                        if val is None:
-                            return
-                        v = str(val).strip()
-                        if not v:
-                            return
-                        where.append(f'"{col}" = ?')
-                        params.append(v)
-                    add_eq("源文件", source_file)
-                    add_eq("日期", date)
-                    add_eq("报表类型", report_type)
-                    add_eq("大类", category)
-                    add_eq("时间属性", time_attr)
-                    kw_input = (subject or q or "").strip()
-                    if kw_input and ("科目" in allowed_cols):
-                        import re
-                        keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
-                        if keywords:
-                            or_clauses = []
-                            for k in keywords:
+                    cur = conn.execute("PRAGMA table_info(warehouse_cleaned)")
+                    cols = [str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1]
+                except Exception:
+                    cols = []
+                cols = [c for c in cols if c not in {"日期", "金额文本", "值状态"}]
+                allowed_cols = set(cols) if cols else {
+                    "源文件", "来源Sheet", "期间", "年份", "报表口径", "报表类型", "大类", "科目", "科目规范", "时间属性", "金额"
+                }
+
+                where: List[str] = []
+                params: List[Any] = []
+
+                def add_eq(col: str, val: str) -> None:
+                    if val is None:
+                        return
+                    v = str(val).strip()
+                    if not v:
+                        return
+                    if col not in allowed_cols:
+                        return
+                    where.append(f'"{col}" = ?')
+                    params.append(v)
+
+                add_eq("batch_id", batch_id)
+                add_eq("源文件", source_file)
+                add_eq("报表类型", report_type)
+                add_eq("大类", category)
+                add_eq("时间属性", time_attr)
+                add_eq("期间", period)
+                add_eq("年份", year)
+                add_eq("报表口径", caliber)
+
+                kw_input = (subject or q or "").strip()
+                if kw_input:
+                    import re
+                    keywords = [k.strip() for k in re.split(r'[\s,，、;/；|/]+', kw_input) if k.strip()]
+                    if keywords:
+                        or_clauses: List[str] = []
+                        for k in keywords:
+                            k_norm = _normalize_subject_text(k)
+                            if k_norm and "科目规范" in allowed_cols:
+                                or_clauses.append('LOWER(CAST("科目规范" AS TEXT)) LIKE ?')
+                                params.append(f"%{k_norm.lower()}%")
+                            if "科目" in allowed_cols:
                                 or_clauses.append('LOWER(CAST("科目" AS TEXT)) LIKE ?')
                                 params.append(f"%{k.lower()}%")
-                            if or_clauses:
-                                where.append(f"({' OR '.join(or_clauses)})")
-                    if min_amount is not None:
-                        try:
-                            if "金额" in allowed_cols:
-                                where.append('"金额" >= ?')
-                                params.append(float(min_amount))
-                        except Exception:
-                            pass
-                    if max_amount is not None:
-                        try:
-                            if "金额" in allowed_cols:
-                                where.append('"金额" <= ?')
-                                params.append(float(max_amount))
-                        except Exception:
-                            pass
-                    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-                    
-                    s_col = str(sort_by or "").strip()
-                    s_dir = str(sort_dir or "").strip().lower()
+                        if or_clauses:
+                            where.append(f"({' OR '.join(or_clauses)})")
 
-                    g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in allowed_cols]
-                    
-                    if g_cols:
-                        g_str = ", ".join([f'"{c}"' for c in g_cols])
-                        base_sql = f'SELECT {g_str}, SUM("金额") as "金额", COUNT(*) as "条数" FROM cleaned' + where_sql + f' GROUP BY {g_str}'
-                        
-                        order_sql = ""
-                        if s_col == "金额":
-                            order_sql = f' ORDER BY SUM("金额") {"ASC" if s_dir == "asc" else "DESC"}'
-                        elif s_col == "条数":
-                            order_sql = f' ORDER BY COUNT(*) {"ASC" if s_dir == "asc" else "DESC"}'
-                        elif s_col in allowed_cols:
-                            order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
-                    else:
-                        base_sql = "SELECT * FROM cleaned" + where_sql
-                        order_sql = ""
-                        if s_col in allowed_cols:
-                            order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
-
-                    cap = 50000
-                    if topn is not None:
-                        try:
-                            cap = int(max(1, min(int(topn), 50000)))
-                        except Exception:
-                            pass
-                    
-                    cur = conn.execute(
-                        base_sql + order_sql + " LIMIT ?",
-                        params + [cap],
-                    )
-                    cols = [d[0] for d in (cur.description or [])]
-                    fetched = cur.fetchall()
-                    
-                    if is_xlsx:
-                        output = io.BytesIO()
-                        try:
-                            df = pd.DataFrame([list(r) for r in fetched], columns=cols)
-                            df.to_excel(output, index=False)
-                            content = output.getvalue()
-                        except Exception as e:
-                            return Response(str(e), media_type="text/plain", status_code=500)
-                    else:
-                        output = io.StringIO()
-                        writer = csv.writer(output)
-                        writer.writerow(cols)
-                        for r in fetched:
-                            writer.writerow(list(r))
-                        content = output.getvalue()
-                        output.close()
-                    
-                    return Response(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
-                finally:
+                if min_amount is not None and "金额" in allowed_cols:
                     try:
-                        conn.close()
+                        where.append('"金额" >= ?')
+                        params.append(float(min_amount))
                     except Exception:
                         pass
-            except Exception as e:
-                return Response(str(e), media_type="text/plain", status_code=500)
-        try:
-            df = runner.load_cleaned_df(tool_id=tid, run_id=rid, force_reload=False)
+                if max_amount is not None and "金额" in allowed_cols:
+                    try:
+                        where.append('"金额" <= ?')
+                        params.append(float(max_amount))
+                    except Exception:
+                        pass
+
+                where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+                s_col = str(sort_by or "").strip()
+                s_dir = str(sort_dir or "").strip().lower()
+                g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in allowed_cols]
+
+                if g_cols:
+                    g_str = ", ".join([f'"{c}"' for c in g_cols])
+                    base_sql = f'SELECT {g_str}, SUM("金额") as "金额", COUNT(*) as "条数" FROM warehouse_cleaned' + where_sql + f' GROUP BY {g_str}'
+                    order_sql = ""
+                    if s_col == "金额":
+                        order_sql = f' ORDER BY SUM("金额") {"ASC" if s_dir == "asc" else "DESC"}'
+                    elif s_col == "条数":
+                        order_sql = f' ORDER BY COUNT(*) {"ASC" if s_dir == "asc" else "DESC"}'
+                    elif s_col in allowed_cols:
+                        order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
+                else:
+                    if cols:
+                        select_list = ", ".join([f'"{c}"' for c in cols])
+                    else:
+                        select_list = "*"
+                    base_sql = f"SELECT {select_list} FROM warehouse_cleaned" + where_sql
+                    order_sql = ""
+                    if s_col in allowed_cols:
+                        order_sql = f' ORDER BY "{s_col}" {"ASC" if s_dir == "asc" else "DESC"}'
+
+                cap = 50000
+                if topn is not None:
+                    try:
+                        cap = int(max(1, min(int(topn), 50000)))
+                    except Exception:
+                        pass
+
+                cur = conn.execute(base_sql + order_sql + " LIMIT ?", params + [cap])
+                out_cols = [d[0] for d in (cur.description or [])]
+                fetched = cur.fetchall()
+
+                if is_xlsx:
+                    output = io.BytesIO()
+                    try:
+                        df = pd.DataFrame([list(r) for r in fetched], columns=out_cols)
+                        df.to_excel(output, index=False)
+                        content = output.getvalue()
+                    except Exception as e:
+                        return Response(str(e), media_type="text/plain", status_code=500)
+                else:
+                    output = io.StringIO()
+                    writer = csv.writer(output)
+                    writer.writerow(out_cols)
+                    for r in fetched:
+                        writer.writerow(list(r))
+                    content = output.getvalue()
+                    output.close()
+
+                return Response(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         except Exception as e:
             return Response(str(e), media_type="text/plain", status_code=500)
-        view = df
-        def _filt_eq(col: str, val: str) -> None:
-            nonlocal view
-            if not val:
-                return
-            if col in view.columns:
-                view = view[view[col].astype(str) == str(val)]
-        _filt_eq("源文件", source_file)
-        _filt_eq("日期", date)
-        _filt_eq("报表类型", report_type)
-        _filt_eq("大类", category)
-        _filt_eq("时间属性", time_attr)
-        kw = (subject or q or "").strip()
-        if kw and "科目" in view.columns:
-            view = view[view["科目"].astype(str).str.contains(kw, case=False, na=False)]
-        if min_amount is not None and "金额" in view.columns:
-            try:
-                view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) >= float(min_amount)]
-            except Exception:
-                pass
-        if max_amount is not None and "金额" in view.columns:
-            try:
-                view = view[pd.to_numeric(view["金额"], errors="coerce").fillna(0) <= float(max_amount)]
-            except Exception:
-                pass
-        
-        g_cols = [c.strip() for c in (group_by or "").split(",") if c.strip() in view.columns]
-        if g_cols:
-            try:
-                # Group by
-                view = view.assign(
-                    金额=pd.to_numeric(view["金额"], errors="coerce").fillna(0)
-                ).groupby(g_cols).agg(
-                    金额=("金额", "sum"),
-                    条数=("金额", "count")
-                ).reset_index()
-            except Exception:
-                pass
-
-        s_col = str(sort_by or "").strip()
-        s_dir = str(sort_dir or "").strip().lower()
-        if s_col and s_col in view.columns:
-            ascending = True if s_dir == "asc" else False
-            try:
-                if s_col == "金额":
-                    view = view.assign(__amt=pd.to_numeric(view["金额"], errors="coerce").fillna(0)).sort_values("__amt", ascending=ascending).drop(columns=["__amt"])
-                else:
-                    view = view.sort_values(s_col, ascending=ascending)
-            except Exception:
-                pass
-        cap = 50000
-        if topn is not None:
-            try:
-                cap = int(max(1, min(int(topn), 50000)))
-            except Exception:
-                pass
-        
-        if is_xlsx:
-            output = io.BytesIO()
-            try:
-                view.head(cap).to_excel(output, index=False)
-                content = output.getvalue()
-            finally:
-                output.close()
-        else:
-            output = io.StringIO()
-            try:
-                view.head(cap).to_csv(output, index=False)
-                content = output.getvalue()
-            finally:
-                output.close()
-        return Response(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     @app.post("/api/open")
     def api_open(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1349,6 +1643,22 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     chosen_port = choose_web_port(host, int(port or 0))
+    try:
+        rp = os.path.abspath(os.path.join(_default_data_root(), "web_runtime.json"))
+        _ensure_dir(os.path.dirname(rp))
+        with open(rp, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "host": str(host),
+                    "port": int(chosen_port),
+                    "pid": int(os.getpid()),
+                    "config_path": os.path.abspath(str(config_path or "")),
+                },
+                f,
+                ensure_ascii=False,
+            )
+    except Exception:
+        pass
     if open_browser:
         try:
             import webbrowser
