@@ -16,3 +16,9 @@ try:
     register_tool(ToolSpec(id="financial_metrics", name="生成财务指标", run=run_financial_metrics))
 except ImportError as e:
     print(f"Failed to register builtin tool financial_metrics: {e}")
+
+try:
+    from tools.payment_monitor.core import run_analysis as run_payment_monitor
+    register_tool(ToolSpec(id="payment_monitor", name="收款进度监控", run=run_payment_monitor))
+except ImportError as e:
+    print(f"Failed to register builtin tool payment_monitor: {e}")

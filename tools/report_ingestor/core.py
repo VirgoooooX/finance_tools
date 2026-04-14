@@ -804,12 +804,13 @@ def clean_bs(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         data_end = int(footer_row) + 1 if footer_row is not None else None
 
         df_left = df.iloc[data_start:data_end, [0, 1, 2]].copy()
-        df_left.columns = ["科目", "年初余额", "期末余额"]
+        # 新报表格式：col1=期末余额, col2=年初余额（原旧格式为年初/期末，现已对调）
+        df_left.columns = ["科目", "期末余额", "年初余额"]
         df_left["大类"] = "资产"
         df_parts = [df_left]
         if df.shape[1] >= 6:
             df_right = df.iloc[data_start:data_end, [3, 4, 5]].copy()
-            df_right.columns = ["科目", "年初余额", "期末余额"]
+            df_right.columns = ["科目", "期末余额", "年初余额"]
             df_right["大类"] = "负债及权益"
             df_parts.append(df_right)
         df_clean = pd.concat(df_parts, ignore_index=True).dropna(subset=["科目"])
@@ -836,11 +837,13 @@ def clean_pl(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
         date_val = _read_date_from_cells(df, _get_param(cfg, "date_cells_pl", [[2, 2], [2, 1]]))
         report_date = clean_date_str(date_val)
-        header_kw = str(_get_param(cfg, "header_keyword_pl", "本年累计") or "本年累计")
+        # 新报表格式表头关键字为「本期金额」（旧格式为「本年累计」）
+        header_kw = str(_get_param(cfg, "header_keyword_pl", "本期金额") or "本期金额")
         header_row = _find_header_row(df, header_kw)
         if header_row is None:
             raise ValueError(f"未找到表头关键字: {header_kw}")
-        df_clean = df.iloc[header_row + 1 :, [0, 2, 3]].copy()
+        # 新报表格式：col0=科目, col1=本期金额, col2=本年金额（即本年累计）
+        df_clean = df.iloc[header_row + 1 :, [0, 1, 2]].copy()
         df_clean.columns = ["科目", "本期金额", "本年累计金额"]
         df_clean = df_clean.dropna(subset=["科目"])
         df_final = df_clean.melt(id_vars=["科目"], value_vars=["本期金额", "本年累计金额"], var_name="时间属性", value_name="金额")
@@ -851,7 +854,7 @@ def clean_pl(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         df_final["年份"] = str(period_id or "")[:4] if period_id else ""
         df_final["来源Sheet"] = sheet_name
         if logger:
-            logger.info(f"CF-合并 处理完成: {sheet_name}, 提取 {len(df_final)} 行")
+            logger.info(f"PL 处理完成: {sheet_name}, 提取 {len(df_final)} 行")
         return df_final
     except Exception as e:
         if logger:
@@ -870,14 +873,10 @@ def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         header_row = _find_header_row(df, header_kw)
         if header_row is None:
             raise ValueError(f"未找到表头关键字: {header_kw}")
-        df_left = df.iloc[header_row + 1 :, [0, 2, 3]].copy()
-        df_left.columns = ["科目", "本期金额", "本年累计金额"]
-        if df.shape[1] >= 8:
-            df_right = df.iloc[header_row + 1 :, [4, 6, 7]].copy()
-            df_right.columns = ["科目", "本期金额", "本年累计金额"]
-            df_combined = pd.concat([df_left, df_right], ignore_index=True)
-        else:
-            df_combined = df_left
+        # 新报表格式：简单4列，col0=科目, col1=本期金额, col2=本年金额（即本年累计）
+        # 旧格式为多列双栏，新格式已去掉右侧双栏
+        df_combined = df.iloc[header_row + 1 :, [0, 1, 2]].copy()
+        df_combined.columns = ["科目", "本期金额", "本年累计金额"]
         df_combined = df_combined.dropna(subset=["科目"])
         df_combined = df_combined[df_combined["科目"].astype(str).str.strip() != ""]
         df_final = df_combined.melt(id_vars=["科目"], value_vars=["本期金额", "本年累计金额"], var_name="时间属性", value_name="金额")
@@ -887,6 +886,8 @@ def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         df_final["期间"] = period_id
         df_final["年份"] = str(period_id or "")[:4] if period_id else ""
         df_final["来源Sheet"] = sheet_name
+        if logger:
+            logger.info(f"CF 处理完成: {sheet_name}, 提取 {len(df_final)} 行")
         return df_final
     except Exception as e:
         if logger:

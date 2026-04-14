@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>收款进度监控</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    body { padding: 16px; background: var(--bg-body); }
+    .view-pane { animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+    .upload-zone {
+      border: 2px dashed var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 3rem;
+      text-align: center;
+      background: var(--bg-subtle);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .upload-zone:hover { border-color: var(--primary); background: var(--bg); }
+    .upload-zone.dragover { border-color: var(--primary); background: var(--primary-subtle); }
+    .file-list { margin-top: 1rem; max-height: 300px; overflow-y: auto; }
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .status-badge { padding: 0.25rem 0.75rem; border-radius: var(--radius-md); font-size: 0.85rem; font-weight: 500; }
+    .status-unpaid { background: #fee; color: #c33; }
+    .status-partial { background: #ffc; color: #963; }
+    .status-paid { background: #efe; color: #3a3; }
+    .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .summary-card { background: var(--bg); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1rem; }
+    .summary-value { font-size: 1.75rem; font-weight: 600; color: var(--text-primary); }
+    .summary-label { font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <div class="app-container" style="padding: 0; max-width: none;">
+    
+    <!-- Config View -->
+    <div id="view-config" class="view-pane d-none">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-gear"></i>OCR 与匹配配置</div>
+          <div class="d-flex gap-2">
+            <button id="btnReloadCfg" class="btn btn-secondary btn-sm"><i class="bi bi-arrow-clockwise"></i>重载</button>
+            <button id="btnSaveCfg" class="btn btn-primary btn-sm"><i class="bi bi-save"></i>保存</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-2">
+            <div class="form-group col-span-2">
+              <label class="form-label">输入目录</label>
+              <input id="input_dir" class="form-control" placeholder="扫描件所在文件夹">
+              <div class="form-help">包含发票、合同、回执扫描件的文件夹</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">输出目录</label>
+              <input id="output_dir" class="form-control" placeholder="报告输出目录">
+            </div>
+            <div class="form-group">
+              <label class="form-label">输出文件名</label>
+              <input id="output_basename" class="form-control" placeholder="收款进度监控报告.xlsx">
+            </div>
+            <div class="form-group">
+              <label class="form-label">OCR 语言</label>
+              <select id="ocr_lang" class="form-select">
+                <option value="ch">中文</option>
+                <option value="en">英文</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">使用 GPU</label>
+              <div class="d-flex items-center gap-2 mt-2">
+                <input id="ocr_use_gpu" type="checkbox">
+                <label for="ocr_use_gpu" class="form-label" style="margin:0">启用 GPU 加速</label>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">金额容差（%）</label>
+              <input id="tolerance" class="form-control" type="number" step="0.01" min="0" max="100" placeholder="1">
+              <div class="form-help">匹配时允许的金额差异百分比</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">名称相似度阈值</label>
+              <input id="name_similarity_threshold" class="form-control" type="number" step="0.01" min="0" max="1" placeholder="0.8">
+              <div class="form-help">客户名称匹配的最低相似度（0-1）</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">最大文件大小（MB）</label>
+              <input id="max_file_size_mb" class="form-control" type="number" min="1" max="500" placeholder="50">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Upload View -->
+    <div id="view-upload" class="view-pane d-none">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-cloud-upload"></i>上传扫描件</div>
+          <button id="btnClearFiles" class="btn btn-secondary btn-sm"><i class="bi bi-trash"></i>清空</button>
+        </div>
+        <div class="card-body">
+          <div class="upload-zone" id="uploadZone">
+            <i class="bi bi-cloud-arrow-up" style="font-size: 3rem; color: var(--text-secondary);"></i>
+            <p style="margin: 1rem 0 0.5rem; font-size: 1.1rem; color: var(--text-primary);">拖拽文件到此处或点击选择</p>
+            <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">支持 PDF、JPG、PNG 格式</p>
+            <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png" style="display: none;">
+          </div>
+          <div class="file-list" id="fileList"></div>
+          <div class="d-flex gap-2 mt-3">
+            <button id="btnStartProcess" class="btn btn-primary" disabled><i class="bi bi-play-fill"></i>开始处理</button>
+            <button id="btnCancelProcess" class="btn btn-danger" disabled><i class="bi bi-stop-fill"></i>取消</button>
+          </div>
+          <div id="uploadProgress" class="d-none" style="margin-top: 1rem;">
+            <div class="progress" style="height: 24px; background: var(--bg-subtle); border-radius: var(--radius-md); overflow: hidden;">
+              <div id="progressBar" class="progress-bar" style="width: 0%; background: var(--primary); height: 100%; transition: width 0.3s;"></div>
+            </div>
+            <div id="progressText" class="text-mono" style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-secondary);"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dashboard View -->
+    <div id="view-dashboard" class="view-pane d-none">
+      <!-- 统计卡片 -->
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="summary-value" id="dash-total">0</div>
+          <div class="summary-label"><i class="bi bi-file-text"></i> 总合同数</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-value" id="dash-unpaid" style="color: #c33;">0</div>
+          <div class="summary-label"><i class="bi bi-exclamation-circle"></i> 未收款</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-value" id="dash-partial" style="color: #963;">0</div>
+          <div class="summary-label"><i class="bi bi-hourglass-split"></i> 部分收款</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-value" id="dash-paid" style="color: #3a3;">0</div>
+          <div class="summary-label"><i class="bi bi-check-circle"></i> 已收款</div>
+        </div>
+      </div>
+
+      <!-- 金额统计 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-cash-stack"></i>金额统计</div>
+          <button id="btnRefreshDash" class="btn btn-secondary btn-sm"><i class="bi bi-arrow-clockwise"></i>刷新</button>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-3">
+            <div>
+              <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">合同总金额</div>
+              <div style="font-size: 1.5rem; font-weight: 600; color: var(--text-primary);" id="dash-contract-amount">¥0.00</div>
+            </div>
+            <div>
+              <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">已收款总额</div>
+              <div style="font-size: 1.5rem; font-weight: 600; color: #3a3;" id="dash-received-amount">¥0.00</div>
+            </div>
+            <div>
+              <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">整体收款比例</div>
+              <div style="font-size: 1.5rem; font-weight: 600; color: var(--primary);" id="dash-ratio">0%</div>
+            </div>
+          </div>
+          
+          <!-- 收款进度条 -->
+          <div style="margin-top: 1.5rem;">
+            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">收款进度</div>
+            <div style="height: 32px; background: var(--bg-subtle); border-radius: var(--radius-md); overflow: hidden; position: relative;">
+              <div id="dash-progress-bar" style="height: 100%; background: linear-gradient(90deg, #3a3, #5c5); transition: width 0.5s; width: 0%;"></div>
+              <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: 600; color: var(--text-primary);" id="dash-progress-text">0%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 收款状态分布图 -->
+      <div class="grid grid-cols-2">
+        <div class="card">
+          <div class="card-header"><div class="card-title"><i class="bi bi-pie-chart"></i>收款状态分布</div></div>
+          <div class="card-body">
+            <canvas id="statusChart" style="max-height: 300px;"></canvas>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header"><div class="card-title"><i class="bi bi-bar-chart"></i>Top 10 客户（按合同金额）</div></div>
+          <div class="card-body">
+            <canvas id="customerChart" style="max-height: 300px;"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- 最近更新 -->
+      <div class="card">
+        <div class="card-header"><div class="card-title"><i class="bi bi-clock-history"></i>最近更新的合同</div></div>
+        <div class="table-container" style="border:none; box-shadow:none; max-height: 300px;">
+          <table class="financial-table">
+            <thead>
+              <tr>
+                <th>合同编号</th>
+                <th>客户名称</th>
+                <th>合同金额</th>
+                <th>已收款金额</th>
+                <th>收款状态</th>
+                <th>收款比例</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody id="recentBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Query View -->
+    <div id="view-query" class="view-pane d-none">
+      <div class="summary-grid" id="summaryCards"></div>
+      
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="bi bi-filter"></i>筛选条件</div>
+          <div class="d-flex gap-2">
+            <button id="btnQuery" class="btn btn-primary btn-sm"><i class="bi bi-search"></i>查询</button>
+            <button id="btnExport" class="btn btn-secondary btn-sm"><i class="bi bi-download"></i>导出</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-3">
+            <div class="form-group">
+              <label class="form-label">收款状态</label>
+              <select id="qStatus" class="form-select">
+                <option value="">全部</option>
+                <option value="unpaid">未收款</option>
+                <option value="partial">部分收款</option>
+                <option value="paid">已收款</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">客户名称</label>
+              <input id="qCustomer" class="form-control" placeholder="支持模糊搜索">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title"><i class="bi bi-table"></i>收款明细</div></div>
+        <div class="table-container" style="border:none; box-shadow:none; max-height: 520px;">
+          <table class="financial-table">
+            <thead>
+              <tr>
+                <th>合同编号</th>
+                <th>客户名称</th>
+                <th>合同金额</th>
+                <th>已开票金额</th>
+                <th>已收款金额</th>
+                <th>收款状态</th>
+                <th>收款比例</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody id="detailsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results View -->
+    <div id="view-results" class="view-pane d-none">
+      <div class="card">
+        <div class="card-header"><div class="card-title"><i class="bi bi-check-circle"></i>处理结果</div></div>
+        <div class="card-body">
+          <div id="resultSummary"></div>
+          <div class="grid grid-cols-2 mt-3">
+            <div class="form-group">
+              <label class="form-label">报告文件</label>
+              <div class="d-flex gap-2">
+                <div id="outReport" class="text-mono form-control flex-1" style="background: var(--bg-subtle); border: none;"></div>
+                <button class="btn btn-secondary" onclick="openPath('report')">打开</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">数据库</label>
+              <div id="outDb" class="text-mono form-control" style="background: var(--bg-subtle); border: none;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header"><div class="card-title">处理日志</div></div>
+        <div class="card-body">
+          <div id="errorList" class="text-mono" style="max-height: 300px; overflow-y: auto; font-size: 0.85rem; color: var(--text-secondary);"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const _pathParts = window.location.pathname.split('/');
+    let TOOL_ID = "payment_monitor";
+    if (_pathParts.includes('tools')) {
+      const idx = _pathParts.indexOf('tools');
+      if (idx + 1 < _pathParts.length) TOOL_ID = _pathParts[idx + 1];
+    }
+    
+    function withToolId(url) {
+      const sep = url.includes('?') ? '&' : '?';
+      return `${url}${sep}tool_id=${TOOL_ID}`;
+    }
+    
+    async function apiCall(url, opts) {
+      const resp = await fetch(withToolId(url), opts);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    }
+
+    
+    // --- Router ---
+    function showView(viewId) {
+      document.querySelectorAll('.view-pane').forEach(el => el.classList.add('d-none'));
+      const target = document.getElementById(`view-${viewId}`);
+      if (target) target.classList.remove('d-none');
+      
+      if (viewId === 'config') reloadCfg();
+      if (viewId === 'dashboard') loadDashboard();
+      if (viewId === 'query') loadSummary();
+    }
+    
+    function handleHashChange() {
+      const hash = String(window.location.hash || '').replace(/^#/, '');
+      const p = new URLSearchParams(hash);
+      const tab = String(p.get('tab') || '').trim();
+      showView(tab || 'config');
+    }
+    window.addEventListener('hashchange', handleHashChange);
+    
+    // --- Config Logic ---
+    function getCfgFromForm() {
+      return {
+        input_dir: document.getElementById('input_dir').value.trim(),
+        output_dir: document.getElementById('output_dir').value.trim(),
+        output_basename: document.getElementById('output_basename').value.trim(),
+        ocr_lang: document.getElementById('ocr_lang').value,
+        ocr_use_gpu: document.getElementById('ocr_use_gpu').checked,
+        tolerance: parseFloat(document.getElementById('tolerance').value) / 100 || 0.01,
+        name_similarity_threshold: parseFloat(document.getElementById('name_similarity_threshold').value) || 0.8,
+        max_file_size_mb: parseInt(document.getElementById('max_file_size_mb').value) || 50
+      };
+    }
+    
+    function fillForm(cfg) {
+      document.getElementById('input_dir').value = cfg.input_dir || '';
+      document.getElementById('output_dir').value = cfg.output_dir || '';
+      document.getElementById('output_basename').value = cfg.output_basename || '收款进度监控报告.xlsx';
+      document.getElementById('ocr_lang').value = cfg.ocr_lang || 'ch';
+      document.getElementById('ocr_use_gpu').checked = !!cfg.ocr_use_gpu;
+      document.getElementById('tolerance').value = (cfg.tolerance || 0.01) * 100;
+      document.getElementById('name_similarity_threshold').value = cfg.name_similarity_threshold || 0.8;
+      document.getElementById('max_file_size_mb').value = cfg.max_file_size_mb || 50;
+    }
+    
+    async function reloadCfg() {
+      try {
+        const data = await apiCall('/api/config');
+        fillForm(data);
+      } catch (e) {
+        console.error('加载配置失败:', e);
+      }
+    }
+    
+    async function saveCfg() {
+      try {
+        const payload = getCfgFromForm();
+        const data = await apiCall('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        fillForm(data);
+        console.log('配置已保存');
+      } catch (e) {
+        console.error('保存配置失败:', e);
+      }
+    }
+    
+    // --- Upload Logic ---
+    let selectedFiles = [];
+    
+    function updateFileList() {
+      const list = document.getElementById('fileList');
+      list.innerHTML = '';
+      
+      selectedFiles.forEach((file, idx) => {
+        const div = document.createElement('div');
+        div.className = 'file-item';
+        div.innerHTML = `
+          <span><i class="bi bi-file-earmark"></i> ${file.name} (${(file.size / 1024).toFixed(1)} KB)</span>
+          <button class="btn btn-danger btn-sm" onclick="removeFile(${idx})"><i class="bi bi-x"></i></button>
+        `;
+        list.appendChild(div);
+      });
+      
+      document.getElementById('btnStartProcess').disabled = selectedFiles.length === 0;
+    }
+    
+    function removeFile(idx) {
+      selectedFiles.splice(idx, 1);
+      updateFileList();
+    }
+    
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+    
+    uploadZone.addEventListener('click', () => fileInput.click());
+    
+    uploadZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadZone.classList.add('dragover');
+    });
+    
+    uploadZone.addEventListener('dragleave', () => {
+      uploadZone.classList.remove('dragover');
+    });
+    
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('dragover');
+      const files = Array.from(e.dataTransfer.files);
+      selectedFiles.push(...files);
+      updateFileList();
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      selectedFiles.push(...files);
+      updateFileList();
+    });
+    
+    document.getElementById('btnClearFiles').addEventListener('click', () => {
+      selectedFiles = [];
+      updateFileList();
+    });
+    
+    
+    // --- Dashboard Logic ---
+    let statusChartInstance = null;
+    let customerChartInstance = null;
+    
+    async function loadDashboard() {
+      try {
+        // 加载统计摘要
+        const summaryResp = await apiCall('/api/payment/summary');
+        if (summaryResp.ok) {
+          renderDashboardSummary(summaryResp);
+          renderStatusChart(summaryResp);
+        }
+        
+        // 加载 Top 客户
+        const topResp = await apiCall('/api/payment/top-customers?limit=10');
+        if (topResp.ok) {
+          renderCustomerChart(topResp.rows || []);
+        }
+        
+        // 加载最近更新
+        const recentResp = await apiCall('/api/payment/recent?limit=10');
+        if (recentResp.ok) {
+          renderRecentContracts(recentResp.rows || []);
+        }
+        
+      } catch (e) {
+        console.error('加载 Dashboard 失败:', e);
+        
+        // 显示友好的错误提示
+        document.getElementById('dash-total').innerText = '-';
+        document.getElementById('dash-unpaid').innerText = '-';
+        document.getElementById('dash-partial').innerText = '-';
+        document.getElementById('dash-paid').innerText = '-';
+      }
+    }
+    
+    function renderDashboardSummary(summary) {
+      document.getElementById('dash-total').innerText = summary.total_contracts || 0;
+      document.getElementById('dash-unpaid').innerText = summary.unpaid_count || 0;
+      document.getElementById('dash-partial').innerText = summary.partial_count || 0;
+      document.getElementById('dash-paid').innerText = summary.paid_count || 0;
+      
+      const contractAmount = summary.total_contract_amount || 0;
+      const receivedAmount = summary.total_received_amount || 0;
+      const ratio = summary.overall_payment_ratio || 0;
+      
+      document.getElementById('dash-contract-amount').innerText = '¥' + contractAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      document.getElementById('dash-received-amount').innerText = '¥' + receivedAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      document.getElementById('dash-ratio').innerText = (ratio * 100).toFixed(1) + '%';
+      
+      document.getElementById('dash-progress-bar').style.width = (ratio * 100) + '%';
+      document.getElementById('dash-progress-text').innerText = (ratio * 100).toFixed(1) + '%';
+    }
+    
+    function renderStatusChart(summary) {
+      const ctx = document.getElementById('statusChart');
+      if (!ctx) return;
+      
+      if (statusChartInstance) {
+        statusChartInstance.destroy();
+      }
+      
+      statusChartInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: ['未收款', '部分收款', '已收款'],
+          datasets: [{
+            data: [summary.unpaid_count || 0, summary.partial_count || 0, summary.paid_count || 0],
+            backgroundColor: ['#fee', '#ffc', '#efe'],
+            borderColor: ['#c33', '#963', '#3a3'],
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              position: 'bottom'
+            }
+          }
+        }
+      });
+    }
+    
+    function renderCustomerChart(customers) {
+      const ctx = document.getElementById('customerChart');
+      if (!ctx) return;
+      
+      if (customerChartInstance) {
+        customerChartInstance.destroy();
+      }
+      
+      const labels = customers.map(c => c.customer_name);
+      const contractData = customers.map(c => c.contract_amount);
+      const receivedData = customers.map(c => c.received_amount);
+      
+      customerChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: '合同金额',
+              data: contractData,
+              backgroundColor: 'rgba(54, 162, 235, 0.5)',
+              borderColor: 'rgba(54, 162, 235, 1)',
+              borderWidth: 1
+            },
+            {
+              label: '已收款金额',
+              data: receivedData,
+              backgroundColor: 'rgba(75, 192, 192, 0.5)',
+              borderColor: 'rgba(75, 192, 192, 1)',
+              borderWidth: 1
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '¥' + (value / 10000).toFixed(0) + '万';
+                }
+              }
+            }
+          },
+          plugins: {
+            legend: {
+              position: 'bottom'
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  return context.dataset.label + ': ¥' + context.parsed.y.toLocaleString('zh-CN');
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+    
+    function renderRecentContracts(contracts) {
+      const tbody = document.getElementById('recentBody');
+      tbody.innerHTML = '';
+      
+      if (!contracts || contracts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-secondary);">暂无数据</td></tr>';
+        return;
+      }
+      
+      contracts.forEach(row => {
+        const tr = document.createElement('tr');
+        const statusClass = row.status === 'paid' ? 'status-paid' : row.status === 'partial' ? 'status-partial' : 'status-unpaid';
+        const statusText = row.status === 'paid' ? '已收款' : row.status === 'partial' ? '部分收款' : '未收款';
+        
+        tr.innerHTML = `
+          <td>${row.contract_number || ''}</td>
+          <td>${row.customer_name || ''}</td>
+          <td>¥${row.contract_amount ? row.contract_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}</td>
+          <td>¥${row.received_amount ? row.received_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}</td>
+          <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+          <td>${row.payment_ratio ? (row.payment_ratio * 100).toFixed(1) + '%' : '0%'}</td>
+          <td>${row.last_updated || ''}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+    
+    // --- Query Logic ---
+    async function loadSummary() {
+      try {
+        const summaryResp = await apiCall('/api/payment/summary');
+        if (summaryResp.ok) {
+          const summaryCards = document.getElementById('summaryCards');
+          summaryCards.innerHTML = `
+            <div class="summary-card">
+              <div class="summary-value">${summaryResp.total_contracts || 0}</div>
+              <div class="summary-label">总合同数</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-value">${summaryResp.unpaid_count || 0}</div>
+              <div class="summary-label">未收款</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-value">${summaryResp.partial_count || 0}</div>
+              <div class="summary-label">部分收款</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-value">${summaryResp.paid_count || 0}</div>
+              <div class="summary-label">已收款</div>
+            </div>
+          `;
+        }
+      } catch (e) {
+        console.error('加载摘要失败:', e);
+      }
+    }
+    
+    async function queryDetails() {
+      const status = document.getElementById('qStatus').value;
+      const customer = document.getElementById('qCustomer').value.trim();
+      
+      try {
+        const qs = new URLSearchParams();
+        if (status) qs.set('status', status);
+        if (customer) qs.set('customer', customer);
+        
+        const data = await apiCall('/api/payment/details?' + qs.toString());
+        if (data.ok) {
+          renderDetails(data.rows || []);
+        } else {
+          document.getElementById('detailsBody').innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-secondary);">查询失败</td></tr>';
+        }
+      } catch (e) {
+        console.error('查询失败:', e);
+        document.getElementById('detailsBody').innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-secondary);">查询失败</td></tr>';
+      }
+    }
+    
+    function renderDetails(rows) {
+      const tbody = document.getElementById('detailsBody');
+      tbody.innerHTML = '';
+      
+      if (!rows || rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-secondary);">暂无数据</td></tr>';
+        return;
+      }
+      
+      rows.forEach(row => {
+        const tr = document.createElement('tr');
+        const statusClass = row.status === 'paid' ? 'status-paid' : row.status === 'partial' ? 'status-partial' : 'status-unpaid';
+        const statusText = row.status === 'paid' ? '已收款' : row.status === 'partial' ? '部分收款' : '未收款';
+        
+        tr.innerHTML = `
+          <td>${row.contract_number || ''}</td>
+          <td>${row.customer_name || ''}</td>
+          <td>¥${row.contract_amount ? row.contract_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}</td>
+          <td>¥${row.invoiced_amount ? row.invoiced_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}</td>
+          <td>¥${row.received_amount ? row.received_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}</td>
+          <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+          <td>${row.payment_ratio ? (row.payment_ratio * 100).toFixed(1) + '%' : '0%'}</td>
+          <td>${row.last_updated || ''}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+    
+    // --- Event Handlers ---
+    document.getElementById('btnReloadCfg').addEventListener('click', reloadCfg);
+    document.getElementById('btnSaveCfg').addEventListener('click', saveCfg);
+    document.getElementById('btnQuery').addEventListener('click', queryDetails);
+    document.getElementById('btnRefreshDash').addEventListener('click', loadDashboard);
+    
+    document.getElementById('btnStartProcess').addEventListener('click', async () => {
+      if (selectedFiles.length === 0) return;
+      
+      try {
+        // 先保存配置
+        await saveCfg();
+        
+        // 启动处理
+        const resp = await apiCall('/api/run/start', { method: 'POST' });
+        if (resp.ok) {
+          document.getElementById('btnStartProcess').disabled = true;
+          document.getElementById('btnCancelProcess').disabled = false;
+          document.getElementById('uploadProgress').classList.remove('d-none');
+        }
+      } catch (e) {
+        console.error('启动处理失败:', e);
+        alert('启动处理失败: ' + e.message);
+      }
+    });
+    
+    document.getElementById('btnCancelProcess').addEventListener('click', async () => {
+      try {
+        await apiCall('/api/run/stop', { method: 'POST' });
+        document.getElementById('btnStartProcess').disabled = false;
+        document.getElementById('btnCancelProcess').disabled = true;
+      } catch (e) {
+        console.error('取消处理失败:', e);
+      }
+    });
+    
+    document.getElementById('btnExport').addEventListener('click', async () => {
+      try {
+        const status = document.getElementById('qStatus').value;
+        const customer = document.getElementById('qCustomer').value.trim();
+        
+        const qs = new URLSearchParams();
+        if (status) qs.set('status', status);
+        if (customer) qs.set('customer', customer);
+        qs.set('tool_id', TOOL_ID);
+        
+        // 下载文件
+        const url = withToolId('/api/payment/export?' + qs.toString());
+        window.open(url, '_blank');
+      } catch (e) {
+        console.error('导出失败:', e);
+        alert('导出失败: ' + e.message);
+      }
+    });
+    
+    // Listen to platform events
+    window.addEventListener('message', ev => {
+      if (ev.data && ev.data.type === 'fa.event') {
+        const { event, data } = ev.data;
+        
+        if (event === 'progress') {
+          const prog = data || {};
+          const pct = prog.total > 0 ? Math.round((prog.current / prog.total) * 100) : 0;
+          document.getElementById('progressBar').style.width = pct + '%';
+          document.getElementById('progressText').innerText = prog.message || '';
+          document.getElementById('uploadProgress').classList.remove('d-none');
+        }
+        
+        if (event === 'done') {
+          const res = data.result || {};
+          document.getElementById('outReport').innerText = res.cleaned_path || '';
+          document.getElementById('outDb').innerText = res.cleaned_sqlite_path || '';
+          
+          const summary = document.getElementById('resultSummary');
+          summary.innerHTML = `
+            <p><strong>处理完成</strong></p>
+            <p>处理文件数：${res.processed_files || 0}</p>
+            <p>匹配记录数：${res.cleaned_rows || 0}</p>
+          `;
+          
+          if (res.errors && res.errors.length > 0) {
+            const errorList = document.getElementById('errorList');
+            errorList.innerHTML = res.errors.map(e => `<div>${e}</div>`).join('');
+          }
+          
+          showView('results');
+        }
+      }
+    });
+    
+    function openPath(type) {
+      if (type === 'report') {
+        const path = document.getElementById('outReport').innerText;
+        if (path) {
+          // 在新窗口中打开文件路径（实际上浏览器无法直接打开本地文件）
+          // 这里我们可以提供一个下载链接或者显示路径让用户手动打开
+          alert(`报告文件路径：\n${path}\n\n请在文件管理器中打开此文件。`);
+        }
+      }
+    }
+    
+    // --- Init ---
+    handleHashChange();
+    reloadCfg();
+  </script>
+</body>
+</html>

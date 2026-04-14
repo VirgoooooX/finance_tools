@@ -1,0 +1,32 @@
+{
+  "tool_id": "payment_monitor",
+  "input_dir": "",
+  "file_glob": "*.{pdf,jpg,jpeg,png}",
+  "output_dir": "output",
+  "output_basename": "收款进度监控报告.xlsx",
+  "generate_validation": false,
+  "generate_metrics": false,
+  "exclude_output_files": true,
+  "saved_queries": {},
+  "tool_params": {
+    "payment_monitor": {
+      "ocr_engine": "lmstudio",
+      "ocr_use_gpu": false,
+      "ocr_lang": "ch",
+      "ocr_use_lightweight": true,
+      "ocr_max_workers": 4,
+      "ocr_enable_cache": true,
+      "ocr_max_image_size": 1500,
+      "ocr_pdf_dpi": 150,
+      "lmstudio_api_url": "http://localhost:11225/v1/chat/completions",
+      "lmstudio_model": "qwen3-vl-4b-instruct",
+      "lmstudio_temperature": 0.1,
+      "lmstudio_max_tokens": 2000,
+      "lmstudio_enable_thinking": false,
+      "lmstudio_batch_size": 3,
+      "tolerance": 0.01,
+      "name_similarity_threshold": 0.8,
+      "max_file_size_mb": 50
+    }
+  }
+}

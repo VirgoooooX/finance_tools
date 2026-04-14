@@ -1,5 +1,5 @@
 {
-  "input_dir": "L:\\Web\\Financial data analysis",
+  "input_dir": "L:\\Web\\Financial data analysis\\科里斯特",
   "file_glob": "*.xlsx",
   "output_dir": "output",
   "output_basename": "清洗后的AI标准财务表.xlsx",
@@ -133,11 +133,35 @@
             "patterns": [
               "热等静压现金流量表"
             ]
+          },
+          {
+            "statement": "BS",
+            "scope": "单体",
+            "entity": "",
+            "patterns": [
+              "资产负债表"
+            ]
+          },
+          {
+            "statement": "PL",
+            "scope": "单体",
+            "entity": "",
+            "patterns": [
+              "利润表"
+            ]
+          },
+          {
+            "statement": "CF",
+            "scope": "单体",
+            "entity": "",
+            "patterns": [
+              "现金流量表"
+            ]
           }
         ]
       },
       "header_keyword_bs": "期末余额",
-      "header_keyword_pl": "本年累计",
+      "header_keyword_pl": "本期金额",
       "header_keyword_cf": "本期金额",
       "date_cells_bs": [
         [

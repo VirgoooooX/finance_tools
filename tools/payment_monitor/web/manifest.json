@@ -1,0 +1,31 @@
+{
+  "name": "收款进度监控",
+  "version": "1.0.0",
+  "tabs": [
+    {
+      "id": "config",
+      "name": "配置",
+      "icon": "bi-gear"
+    },
+    {
+      "id": "dashboard",
+      "name": "数据看板",
+      "icon": "bi-speedometer2"
+    },
+    {
+      "id": "upload",
+      "name": "上传文档",
+      "icon": "bi-cloud-upload"
+    },
+    {
+      "id": "query",
+      "name": "查询结果",
+      "icon": "bi-table"
+    },
+    {
+      "id": "results",
+      "name": "处理结果",
+      "icon": "bi-check-circle"
+    }
+  ]
+}

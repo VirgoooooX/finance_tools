@@ -20,12 +20,12 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+test_samples
 # Virtual Environment
 venv/
 .venv/
 ENV/
-
+.kiro
 # PyInstaller
 #  Usually these files are written by a python script, so they may be deleted
 #  and recovered over time.

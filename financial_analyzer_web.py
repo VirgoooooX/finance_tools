@@ -1611,6 +1611,188 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         except Exception as e:
             return {"ok": False, "message": str(e)}
 
+    @app.get("/api/payment/summary")
+    def api_payment_summary(tool_id: str = "") -> Dict[str, Any]:
+        """获取收款统计摘要"""
+        try:
+            import sqlite3
+            from tools.payment_monitor.database import query_payment_summary
+            from tools.payment_monitor.models import PaymentSummary
+            
+            db_path = os.path.join(_default_data_root(), "warehouse.sqlite")
+            if not os.path.exists(db_path):
+                return {"ok": False, "message": "数据库不存在"}
+            
+            conn = sqlite3.connect(db_path)
+            try:
+                summary = query_payment_summary(conn)
+                return {
+                    "ok": True,
+                    "total_contracts": summary.total_contracts,
+                    "unpaid_count": summary.unpaid_count,
+                    "partial_count": summary.partial_count,
+                    "paid_count": summary.paid_count,
+                    "total_contract_amount": float(summary.total_contract_amount),
+                    "total_received_amount": float(summary.total_received_amount),
+                    "overall_payment_ratio": summary.overall_payment_ratio,
+                    "generated_at": summary.generated_at.isoformat()
+                }
+            finally:
+                conn.close()
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    @app.get("/api/payment/details")
+    def api_payment_details(status: str = "", customer: str = "", tool_id: str = "") -> Dict[str, Any]:
+        """获取收款明细"""
+        try:
+            import sqlite3
+            from tools.payment_monitor.database import query_payment_details
+            
+            db_path = os.path.join(_default_data_root(), "warehouse.sqlite")
+            if not os.path.exists(db_path):
+                return {"ok": False, "message": "数据库不存在", "rows": []}
+            
+            filters = {}
+            if customer:
+                filters['customer_name'] = customer
+            
+            conn = sqlite3.connect(db_path)
+            try:
+                if status:
+                    rows = query_payment_details(conn, status, filters)
+                else:
+                    # 查询所有状态
+                    rows = []
+                    for s in ['unpaid', 'partial', 'paid']:
+                        rows.extend(query_payment_details(conn, s, filters))
+                
+                return {"ok": True, "rows": rows, "total": len(rows)}
+            finally:
+                conn.close()
+        except Exception as e:
+            return {"ok": False, "message": str(e), "rows": []}
+
+    @app.get("/api/payment/top-customers")
+    def api_payment_top_customers(limit: int = 10, tool_id: str = "") -> Dict[str, Any]:
+        """获取 Top N 客户（按合同金额）"""
+        try:
+            import sqlite3
+            
+            db_path = os.path.join(_default_data_root(), "warehouse.sqlite")
+            if not os.path.exists(db_path):
+                return {"ok": False, "message": "数据库不存在", "rows": []}
+            
+            conn = sqlite3.connect(db_path)
+            try:
+                cur = conn.execute("""
+                    SELECT 
+                        c.customer_name,
+                        SUM(pm.contract_amount) as total_contract,
+                        SUM(pm.received_amount) as total_received
+                    FROM payment_matches pm
+                    LEFT JOIN contracts c ON pm.contract_id = c.contract_id
+                    GROUP BY c.customer_name
+                    ORDER BY total_contract DESC
+                    LIMIT ?
+                """, (limit,))
+                
+                rows = []
+                for r in cur.fetchall():
+                    rows.append({
+                        'customer_name': r[0],
+                        'contract_amount': r[1],
+                        'received_amount': r[2]
+                    })
+                
+                return {"ok": True, "rows": rows}
+            finally:
+                conn.close()
+        except Exception as e:
+            return {"ok": False, "message": str(e), "rows": []}
+
+    @app.get("/api/payment/recent")
+    def api_payment_recent(limit: int = 10, tool_id: str = "") -> Dict[str, Any]:
+        """获取最近更新的合同"""
+        try:
+            import sqlite3
+            
+            db_path = os.path.join(_default_data_root(), "warehouse.sqlite")
+            if not os.path.exists(db_path):
+                return {"ok": False, "message": "数据库不存在", "rows": []}
+            
+            conn = sqlite3.connect(db_path)
+            try:
+                cur = conn.execute("""
+                    SELECT 
+                        c.contract_number,
+                        c.customer_name,
+                        pm.contract_amount,
+                        pm.received_amount,
+                        pm.status,
+                        pm.payment_ratio,
+                        pm.last_updated
+                    FROM payment_matches pm
+                    LEFT JOIN contracts c ON pm.contract_id = c.contract_id
+                    ORDER BY pm.last_updated DESC
+                    LIMIT ?
+                """, (limit,))
+                
+                rows = []
+                for r in cur.fetchall():
+                    rows.append({
+                        'contract_number': r[0],
+                        'customer_name': r[1],
+                        'contract_amount': r[2],
+                        'received_amount': r[3],
+                        'status': r[4],
+                        'payment_ratio': r[5],
+                        'last_updated': r[6]
+                    })
+                
+                return {"ok": True, "rows": rows}
+            finally:
+                conn.close()
+        except Exception as e:
+            return {"ok": False, "message": str(e), "rows": []}
+
+    @app.get("/api/payment/export")
+    def api_payment_export(status: str = "", customer: str = "", tool_id: str = ""):
+        """导出收款明细报告"""
+        try:
+            import sqlite3
+            from tools.payment_monitor.monitor import ProgressMonitor
+            from datetime import datetime
+            
+            db_path = os.path.join(_default_data_root(), "warehouse.sqlite")
+            if not os.path.exists(db_path):
+                return Response(content="数据库不存在", status_code=404)
+            
+            # 构建筛选条件
+            filters = {}
+            if customer:
+                filters['customer_name'] = customer
+            
+            # 生成临时报告文件
+            monitor = ProgressMonitor(db_path)
+            temp_dir = os.path.join(_default_data_root(), "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            filename = f"收款进度报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            temp_path = os.path.join(temp_dir, filename)
+            
+            monitor.export_report(temp_path, filters)
+            
+            # 返回文件
+            return FileResponse(
+                temp_path,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=filename
+            )
+        except Exception as e:
+            return Response(content=f"导出失败: {str(e)}", status_code=500)
+
+
     @app.get("/api/stream")
     def api_stream():
         q = runner.hub.subscribe()
