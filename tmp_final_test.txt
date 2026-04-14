@@ -1,0 +1,21 @@
+﻿python : Traceback (most recent call last):
+所在位置 行:1 字符: 1
++ python -c "
++ ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "<string>", line 12, in <module>
+  File "C:\Users\lonel\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\io\excel\_base.py", line 1550, 
+in __init__
+    ext = inspect_excel_format(
+          ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lonel\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\io\excel\_base.py", line 1402, 
+in inspect_excel_format
+    with get_handle(
+         ^^^^^^^^^^^
+  File "C:\Users\lonel\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\io\common.py", line 882, in get
+_handle
+    handle = open(handle, ioargs.mode)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'L:\\Web\\Financial data analysis\\报表-2026年3期月报.xlsx'

@@ -61,18 +61,6 @@ def _json_safe_value(v: Any) -> Any:
     return sanitize_json(v)
 
 
-_LEGACY_TOP_LEVEL_TOOL_PARAM_KEYS = (
-    "sheet_keyword_bs",
-    "sheet_keyword_pl",
-    "sheet_keyword_cf",
-    "header_keyword_bs",
-    "header_keyword_pl",
-    "header_keyword_cf",
-    "date_cells_bs",
-    "date_cells_pl",
-    "date_cells_cf",
-    "validation_tolerance",
-)
 
 
 def _tool_params(cfg: AppConfig) -> Dict[str, Any]:
@@ -143,9 +131,6 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             if not isinstance(bucket, dict):
                 bucket = {}
             merged = dict(bucket)
-            for k in _LEGACY_TOP_LEVEL_TOOL_PARAM_KEYS:
-                if k in data and k not in merged:
-                    merged[k] = data.get(k)
             tp[tid] = merged
             cfg.tool_id = tid
         return cfg
@@ -428,61 +413,8 @@ def _split_tokens(v: Any) -> List[str]:
     return [s]
 
 
-def _sheet_rules_config(cfg: AppConfig) -> Dict[str, Any]:
-    v = _get_param(cfg, "sheet_rules", {}) or {}
-    return v if isinstance(v, dict) else {}
-
-
-def _sheet_rules_match_mode(cfg: AppConfig) -> str:
-    mode = str(_sheet_rules_config(cfg).get("match_mode") or "contains").strip().lower()
-    return mode if mode in ("exact", "contains", "regex") else "contains"
-
-
-def _sheet_rules_case_insensitive(cfg: AppConfig) -> bool:
-    return bool(_sheet_rules_config(cfg).get("case_insensitive", True))
-
-
-def _sheet_rules_list(cfg: AppConfig) -> List[Dict[str, Any]]:
-    rules = _sheet_rules_config(cfg).get("rules")
-    if not isinstance(rules, list):
-        return []
-    out: List[Dict[str, Any]] = []
-    for r in rules:
-        if isinstance(r, dict):
-            out.append(r)
-    out.sort(key=lambda x: (int(x.get("priority") or 1000),))
-    return out
-
-
-def _match_sheet_name(sheet_name: str, pattern: str, match_mode: str, case_insensitive: bool) -> bool:
-    s = str(sheet_name or "")
-    p = str(pattern or "")
-    if not p:
-        return False
-    if case_insensitive:
-        s = s.upper()
-        p = p.upper()
-    if match_mode == "exact":
-        return s == p
-    if match_mode == "contains":
-        return p in s
-    if match_mode == "regex":
-        try:
-            flags = re.IGNORECASE if case_insensitive else 0
-            return re.search(pattern, sheet_name or "", flags=flags) is not None
-        except Exception:
-            return False
-    return False
-
-
-def _pick_sheet_rule(cfg: AppConfig, sheet_name: str) -> Optional[Dict[str, Any]]:
-    match_mode = _sheet_rules_match_mode(cfg)
-    case_insensitive = _sheet_rules_case_insensitive(cfg)
-    for r in _sheet_rules_list(cfg):
-        patterns = _split_tokens(r.get("patterns"))
-        if any(_match_sheet_name(sheet_name, pat, match_mode, case_insensitive) for pat in patterns):
-            return r
-    return None
+# Sheet 名称 -> 报表类型的固定映射
+_SHEET_TYPE_MAP = {"资产负债表": "BS", "利润表": "PL", "现金流量表": "CF"}
 
 
 def _derive_period_id(report_date: Any) -> str:
@@ -792,15 +724,13 @@ def clean_bs(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-        date_val = _read_date_from_cells(df, _get_param(cfg, "date_cells_bs", [[2, 3], [2, 2]]))
+        date_val = _read_date_from_cells(df, [[1, 0], [1, 3]])
         report_date = clean_date_str(date_val)
-        header_kw = str(_get_param(cfg, "header_keyword_bs", "期末余额") or "期末余额")
-        header_row = _find_header_row(df, header_kw)
+        header_row = _find_header_row(df, "期末余额")
         if header_row is None:
-            raise ValueError(f"未找到表头关键字: {header_kw}")
+            raise ValueError("未找到表头关键字: 期末余额")
         data_start = int(header_row) + 1
-        footer_kw = str(_get_param(cfg, "footer_keyword_bs", "资产总计") or "资产总计").strip()
-        footer_row = _find_footer_row_in_col(df, data_start, 0, footer_kw)
+        footer_row = _find_footer_row_in_col(df, data_start, 0, "资产总计")
         data_end = int(footer_row) + 1 if footer_row is not None else None
 
         df_left = df.iloc[data_start:data_end, [0, 1, 2]].copy()
@@ -835,13 +765,11 @@ def clean_pl(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-        date_val = _read_date_from_cells(df, _get_param(cfg, "date_cells_pl", [[2, 2], [2, 1]]))
+        date_val = _read_date_from_cells(df, [[1, 0], [1, 3]])
         report_date = clean_date_str(date_val)
-        # 新报表格式表头关键字为「本期金额」（旧格式为「本年累计」）
-        header_kw = str(_get_param(cfg, "header_keyword_pl", "本期金额") or "本期金额")
-        header_row = _find_header_row(df, header_kw)
+        header_row = _find_header_row(df, "本期金额")
         if header_row is None:
-            raise ValueError(f"未找到表头关键字: {header_kw}")
+            raise ValueError("未找到表头关键字: 本期金额")
         # 新报表格式：col0=科目, col1=本期金额, col2=本年金额（即本年累计）
         df_clean = df.iloc[header_row + 1 :, [0, 1, 2]].copy()
         df_clean.columns = ["科目", "本期金额", "本年累计金额"]
@@ -867,12 +795,11 @@ def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-        date_val = _read_date_from_cells(df, _get_param(cfg, "date_cells_cf", [[2, 4], [2, 0]]))
+        date_val = _read_date_from_cells(df, [[1, 0], [1, 3]])
         report_date = clean_date_str(date_val)
-        header_kw = str(_get_param(cfg, "header_keyword_cf", "本期金额") or "本期金额")
-        header_row = _find_header_row(df, header_kw)
+        header_row = _find_header_row(df, "本期金额")
         if header_row is None:
-            raise ValueError(f"未找到表头关键字: {header_kw}")
+            raise ValueError("未找到表头关键字: 本期金额")
         # 新报表格式：简单4列，col0=科目, col1=本期金额, col2=本年金额（即本年累计）
         # 旧格式为多列双栏，新格式已去掉右侧双栏
         df_combined = df.iloc[header_row + 1 :, [0, 1, 2]].copy()
@@ -1077,7 +1004,6 @@ def run_analysis(
 
     logger.info(f"找到 {len(files)} 个Excel文件")
     all_files_data = []
-    has_sheet_rules = bool(_sheet_rules_list(cfg))
 
     for idx, file_path in enumerate(files, start=1):
         if cancel_event and cancel_event.is_set():
@@ -1089,95 +1015,32 @@ def run_analysis(
         base_name = os.path.basename(file_path)
         logger.info(f"正在处理文件: {base_name}")
         file_period_id = _extract_period_id_from_filename(base_name)
-        file_report_date = _report_date_from_period_id(file_period_id)
 
         try:
             excel_file = pd.ExcelFile(file_path)
             try:
                 all_sheets = excel_file.sheet_names
                 file_sheets_data: List[pd.DataFrame] = []
-                if has_sheet_rules:
-                    for sheet_name in (all_sheets or []):
-                        if cancel_event and cancel_event.is_set():
-                            result.cancelled = True
-                            return result
-                        rule = _pick_sheet_rule(cfg, sheet_name)
-                        if not rule:
-                            continue
-                        st = str(rule.get("statement") or "").strip().upper()
-                        df: Optional[pd.DataFrame] = None
-                        if st in ("BS", "资产负债表"):
-                            df = clean_bs(file_path, sheet_name, cfg, logger, excel_file=excel_file)
-                        elif st in ("PL", "利润表"):
-                            df = clean_pl(file_path, sheet_name, cfg, logger, excel_file=excel_file)
-                        elif st in ("CF", "现金流量表", "现金流"):
-                            df = clean_cf(file_path, sheet_name, cfg, logger, excel_file=excel_file)
-                        if df is None or df.empty:
-                            continue
-                        if file_period_id:
-                            df["期间"] = file_period_id
-                            df["年份"] = str(file_period_id)[:4]
-
-                        scope_raw = str(rule.get("scope") or "").strip()
-                        scope = scope_raw
-                        if scope_raw.lower() in ("merge",):
-                            scope = "合并"
-                        elif scope_raw.lower() in ("single",):
-                            scope = "单体"
-
-                        entity = str(rule.get("entity") or "").strip()
-                        if entity:
-                            df["主体"] = entity
-                        df["报表版本"] = "月度"
-                        if scope:
-                            df["报表口径"] = scope
-                        file_sheets_data.append(df)
-                else:
-                    kw_bs = _get_param(cfg, "sheet_keyword_bs", "BS-合并")
-                    kw_pl = _get_param(cfg, "sheet_keyword_pl", "PL-合并")
-                    kw_cf = _get_param(cfg, "sheet_keyword_cf", "CF-合并")
-
-                    def _match_sheet(n: str, p: Any) -> bool:
-                        toks = _split_tokens(p)
-                        if not toks:
-                            return False
-                        up = str(n or "").upper()
-                        return any(str(x).upper() in up for x in toks if x)
-
-                    bs_sheets = [s for s in all_sheets if _match_sheet(s, kw_bs)]
-                    pl_sheets = [s for s in all_sheets if _match_sheet(s, kw_pl)]
-                    cf_sheets = [s for s in all_sheets if _match_sheet(s, kw_cf)]
-
-                    for sheet in bs_sheets:
-                        if cancel_event and cancel_event.is_set():
-                            result.cancelled = True
-                            return result
-                        df = clean_bs(file_path, sheet, cfg, logger, excel_file=excel_file)
-                        if not df.empty:
-                            if file_period_id:
-                                df["期间"] = file_period_id
-                                df["年份"] = str(file_period_id)[:4]
-                            file_sheets_data.append(df)
-                    for sheet in pl_sheets:
-                        if cancel_event and cancel_event.is_set():
-                            result.cancelled = True
-                            return result
-                        df = clean_pl(file_path, sheet, cfg, logger, excel_file=excel_file)
-                        if not df.empty:
-                            if file_period_id:
-                                df["期间"] = file_period_id
-                                df["年份"] = str(file_period_id)[:4]
-                            file_sheets_data.append(df)
-                    for sheet in cf_sheets:
-                        if cancel_event and cancel_event.is_set():
-                            result.cancelled = True
-                            return result
-                        df = clean_cf(file_path, sheet, cfg, logger, excel_file=excel_file)
-                        if not df.empty:
-                            if file_period_id:
-                                df["期间"] = file_period_id
-                                df["年份"] = str(file_period_id)[:4]
-                            file_sheets_data.append(df)
+                for sheet_name in (all_sheets or []):
+                    if cancel_event and cancel_event.is_set():
+                        result.cancelled = True
+                        return result
+                    st = _SHEET_TYPE_MAP.get(sheet_name)
+                    if not st:
+                        continue
+                    df: Optional[pd.DataFrame] = None
+                    if st == "BS":
+                        df = clean_bs(file_path, sheet_name, cfg, logger, excel_file=excel_file)
+                    elif st == "PL":
+                        df = clean_pl(file_path, sheet_name, cfg, logger, excel_file=excel_file)
+                    elif st == "CF":
+                        df = clean_cf(file_path, sheet_name, cfg, logger, excel_file=excel_file)
+                    if df is None or df.empty:
+                        continue
+                    if file_period_id:
+                        df["期间"] = file_period_id
+                        df["年份"] = str(file_period_id)[:4]
+                    file_sheets_data.append(df)
 
                 if file_sheets_data:
                     file_data = pd.concat(file_sheets_data, ignore_index=True)
@@ -1267,7 +1130,7 @@ def run_analysis(
     except Exception:
         pass
     try:
-        _write_to_warehouse(all_data, batch_id=str(stamp), cfg=cfg, mode=_sheet_rules_match_mode(cfg))
+        _write_to_warehouse(all_data, batch_id=str(stamp), cfg=cfg, mode="fixed")
     except Exception as e:
         result.errors.append(f"写入累计库失败: {e}")
     result.artifacts = _build_artifacts_common(

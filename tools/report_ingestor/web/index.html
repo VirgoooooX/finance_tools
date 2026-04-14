@@ -50,70 +50,7 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title"><i class="bi bi-diagram-3"></i>Sheet 识别规则</div>
-              <div class="d-flex gap-2">
-                <button id="btnSheetRulesAdd" class="btn btn-secondary btn-sm"><i class="bi bi-plus"></i>新增规则</button>
-              </div>
-            </div>
-            <div class="card-body">
-              <div class="grid grid-cols-3">
-                <div>
-                  <label class="form-label">匹配模式</label>
-                  <select id="sheet_rules_match_mode" class="form-select">
-                    <option value="exact">exact（完全一致）</option>
-                    <option value="contains">contains（包含）</option>
-                    <option value="regex">regex（正则）</option>
-                  </select>
-                </div>
-                <div class="col-span-2 d-flex items-center gap-2 mt-4">
-                  <input id="sheet_rules_case_insensitive" type="checkbox">
-                  <label for="sheet_rules_case_insensitive" class="form-label" style="margin:0">忽略大小写</label>
-                  <div class="form-help" style="margin:0 0 0 12px;">每条规则按 patterns 匹配 Sheet 名称</div>
-                </div>
-              </div>
-              <div class="table-container" style="margin-top: 1rem;">
-                <table class="financial-table">
-                  <thead>
-                    <tr>
-                      <th style="width: 110px;">报表</th>
-                      <th style="width: 110px;">口径</th>
-                      <th style="width: 160px;">主体</th>
-                      <th>patterns（用 ; 分隔）</th>
-                      <th style="width: 70px;"></th>
-                    </tr>
-                  </thead>
-                  <tbody id="sheetRulesBody"></tbody>
-                </table>
-              </div>
-            </div>
-          </div>
 
-          <div class="card">
-            <div class="card-header"><div class="card-title"><i class="bi bi-funnel"></i>表头关键字</div></div>
-            <div class="card-body">
-              <div class="grid grid-cols-3">
-                <div><label class="form-label">BS 表头关键字</label><input id="header_keyword_bs" class="form-control"></div>
-                <div><label class="form-label">PL 表头关键字</label><input id="header_keyword_pl" class="form-control"></div>
-                <div><label class="form-label">CF 表头关键字</label><input id="header_keyword_cf" class="form-control"></div>
-              </div>
-            </div>
-          </div>
-          
-           <div class="card">
-            <div class="card-header"><div class="card-title"><i class="bi bi-calendar-check"></i>日期与验证</div></div>
-            <div class="card-body">
-              <div class="grid grid-cols-3">
-                <div><label class="form-label">BS 日期单元格</label><input id="date_cells_bs" class="form-control" placeholder="行,列"></div>
-                <div><label class="form-label">PL 日期单元格</label><input id="date_cells_pl" class="form-control" placeholder="行,列"></div>
-                <div><label class="form-label">CF 日期单元格</label><input id="date_cells_cf" class="form-control" placeholder="行,列"></div>
-                <div class="col-span-3 d-flex items-center gap-4 mt-4">
-                  <div class="d-flex items-center gap-2"><input id="exclude_output_files" type="checkbox"><label for="exclude_output_files" class="form-label" style="margin:0">排除输出文件</label></div>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
         
         <!-- Sidebar -->
@@ -421,111 +358,13 @@
       return await resp.json();
     }
     
-    // --- Config Logic ---
-    function cellsToText(cells) {
-      if (!Array.isArray(cells)) return '';
-      return cells.map(x => Array.isArray(x) && x.length >= 2 ? `${x[0]},${x[1]}` : '').filter(Boolean).join(';');
-    }
-    function textToCells(text) {
-      const s = (text || '').trim();
-      if (!s) return [];
-      return s.split(/[;\n|]+/).map(x => x.trim()).filter(Boolean).map(chunk => {
-        const parts = chunk.split(/[, \t]+/).map(x => x.trim()).filter(Boolean);
-        if (parts.length < 2) return null;
-        const r = parseInt(parts[0]); const c = parseInt(parts[1]);
-        if (Number.isNaN(r) || Number.isNaN(c)) return null;
-        return [r, c];
-      }).filter(Boolean);
-    }
-    function patternsToText(patterns) {
-      if (!Array.isArray(patterns)) return '';
-      return patterns.map(x => String(x || '').trim()).filter(Boolean).join(';');
-    }
-    function textToPatterns(text) {
-      const s = String(text || '').trim();
-      if (!s) return [];
-      return s.split(/[;\n|]+/).map(x => x.trim()).filter(Boolean);
-    }
-    function _escapeHtml2(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-    function _addSheetRuleRow(rule) {
-      const r = rule || {};
-      const st = String(r.statement || '').trim();
-      const scope = String(r.scope || '').trim();
-      const entity = String(r.entity || '').trim();
-      const patterns = patternsToText(r.patterns);
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>
-          <select class="form-select form-select-sm" data-role="statement">
-            <option value=""></option>
-            <option value="BS">BS</option>
-            <option value="PL">PL</option>
-            <option value="CF">CF</option>
-          </select>
-        </td>
-        <td>
-          <select class="form-select form-select-sm" data-role="scope">
-            <option value=""></option>
-            <option value="合并">合并</option>
-            <option value="单体">单体</option>
-          </select>
-        </td>
-        <td><input class="form-control form-control-sm" data-role="entity" value="${_escapeHtml2(entity)}"></td>
-        <td><input class="form-control form-control-sm" data-role="patterns" value="${_escapeHtml2(patterns)}"></td>
-        <td class="text-right"><button class="btn btn-danger btn-sm" data-role="delete"><i class="bi bi-trash"></i></button></td>
-      `;
-      const stSel = tr.querySelector('[data-role="statement"]');
-      const scSel = tr.querySelector('[data-role="scope"]');
-      if (stSel && st && !Array.from(stSel.options).some(o => o.value === st)) {
-        const opt = document.createElement('option');
-        opt.value = st;
-        opt.innerText = st;
-        stSel.appendChild(opt);
-      }
-      if (stSel) stSel.value = st;
-      if (scSel) scSel.value = scope;
-      tr.querySelector('[data-role="delete"]').addEventListener('click', () => tr.remove());
-      document.getElementById('sheetRulesBody').appendChild(tr);
-    }
-    function _fillSheetRulesUI(sheetRules) {
-      const sr = (sheetRules && typeof sheetRules === 'object') ? sheetRules : {};
-      const mode = String(sr.match_mode || 'contains').trim().toLowerCase();
-      document.getElementById('sheet_rules_match_mode').value = (['exact','contains','regex'].includes(mode) ? mode : 'contains');
-      document.getElementById('sheet_rules_case_insensitive').checked = (sr.case_insensitive !== false);
-      document.getElementById('sheetRulesBody').innerHTML = '';
-      const rules = Array.isArray(sr.rules) ? sr.rules : [];
-      if (rules.length) rules.forEach(r => _addSheetRuleRow(r));
-      else _addSheetRuleRow({ statement: 'BS', scope: '合并', entity: '集团合并', patterns: ['BS-合并'] });
-    }
-    function _getSheetRulesFromUI() {
-      const mode = String(document.getElementById('sheet_rules_match_mode').value || 'contains').trim();
-      const ci = !!document.getElementById('sheet_rules_case_insensitive').checked;
-      const rules = [];
-      document.querySelectorAll('#sheetRulesBody tr').forEach(tr => {
-        const statement = String(tr.querySelector('[data-role="statement"]')?.value || '').trim();
-        const scope = String(tr.querySelector('[data-role="scope"]')?.value || '').trim();
-        const entity = String(tr.querySelector('[data-role="entity"]')?.value || '').trim();
-        const patterns = textToPatterns(tr.querySelector('[data-role="patterns"]')?.value || '');
-        const isEmpty = !statement && !scope && !entity && patterns.length === 0;
-        if (isEmpty) return;
-        rules.push({ statement, scope, entity, patterns });
-      });
-      return { match_mode: mode, case_insensitive: ci, rules };
-    }
     function getCfgFromForm() {
       return {
         input_dir: document.getElementById('input_dir').value.trim(),
         file_glob: document.getElementById('file_glob').value.trim(),
         output_dir: document.getElementById('output_dir').value.trim(),
         output_basename: document.getElementById('output_basename').value.trim(),
-        exclude_output_files: document.getElementById('exclude_output_files').checked,
-        sheet_rules: _getSheetRulesFromUI(),
-        header_keyword_bs: document.getElementById('header_keyword_bs').value.trim(),
-        header_keyword_pl: document.getElementById('header_keyword_pl').value.trim(),
-        header_keyword_cf: document.getElementById('header_keyword_cf').value.trim(),
-        date_cells_bs: textToCells(document.getElementById('date_cells_bs').value),
-        date_cells_pl: textToCells(document.getElementById('date_cells_pl').value),
-        date_cells_cf: textToCells(document.getElementById('date_cells_cf').value)
+        exclude_output_files: true
       };
     }
     function fillForm(cfg) {
@@ -533,14 +372,6 @@
       document.getElementById('file_glob').value = cfg.file_glob || '';
       document.getElementById('output_dir').value = cfg.output_dir || '';
       document.getElementById('output_basename').value = cfg.output_basename || '';
-      document.getElementById('exclude_output_files').checked = !!cfg.exclude_output_files;
-      _fillSheetRulesUI(cfg.sheet_rules || {});
-      document.getElementById('header_keyword_bs').value = cfg.header_keyword_bs || '';
-      document.getElementById('header_keyword_pl').value = cfg.header_keyword_pl || '';
-      document.getElementById('header_keyword_cf').value = cfg.header_keyword_cf || '';
-      document.getElementById('date_cells_bs').value = cellsToText(cfg.date_cells_bs);
-      document.getElementById('date_cells_pl').value = cellsToText(cfg.date_cells_pl);
-      document.getElementById('date_cells_cf').value = cellsToText(cfg.date_cells_cf);
     }
     async function reloadCfg() {
       try { fillForm(await apiCall('/api/config')); setStatus('已加载配置'); } catch {}
@@ -781,7 +612,6 @@
     document.getElementById('btnSaveCfg').addEventListener('click', saveCfg);
     document.getElementById('btnSaveCfg2').addEventListener('click', saveCfg);
     document.getElementById('btnScan2').addEventListener('click', scanFiles);
-    document.getElementById('btnSheetRulesAdd').addEventListener('click', () => _addSheetRuleRow({ statement: '', scope: '', entity: '', patterns: [] }));
     document.getElementById('btnClearFiles').addEventListener('click', () => document.getElementById('filesPreview').innerText = '');
     
     document.getElementById('btnReloadQueryOptions').addEventListener('click', () => loadQueryOptions(true));

@@ -1,0 +1,12 @@
+﻿Found: []
+python : Traceback (most recent call last):
+At line:1 char:1
++ python -X utf8 "L:\Web\Financial data analysis\tools\report_ingestor\ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "L:\Web\Financial data analysis\tools\report_ingestor\_test_parse.py", line 16, in <module>
+    fp = files[0]
+         ~~~~~^^^
+IndexError: list index out of range
