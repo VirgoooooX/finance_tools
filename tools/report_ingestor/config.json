@@ -3,6 +3,8 @@
   "file_glob": "*.xlsx",
   "output_dir": "output",
   "output_basename": "清洗后的AI标准财务表.xlsx",
+  "generate_validation": true,
+  "generate_metrics": true,
   "exclude_output_files": true,
   "saved_queries": {},
   "tool_id": "report_ingestor",

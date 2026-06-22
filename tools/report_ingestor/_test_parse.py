@@ -1,36 +1,82 @@
 # -*- coding: utf-8 -*-
-import sys, os, glob
-sys.path.insert(0, r'L:\Web\Financial data analysis')
-sys.path.insert(0, r'L:\Web\Financial data analysis\tools')
+import glob
+import os
+import sys
 
 import pandas as pd
-from report_ingestor.core import clean_bs, clean_pl, clean_cf, load_config
 
-cfg = load_config(r'L:\Web\Financial data analysis\tools\report_ingestor\config.json')
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
-# 找到报表文件
-files = glob.glob(os.path.join(r'L:\Web\Financial data analysis', '报表-2026年3期月报.xlsx'))
-if not files:
-    files = glob.glob(os.path.join(r'L:\Web\Financial data analysis', '*月报*.xlsx'))
-print("Found:", files)
-fp = files[0]
+from tools.report_ingestor.core import (  # noqa: E402
+    _classify_sheet_type,
+    _infer_header_metadata,
+    clean_bs,
+    clean_cf,
+    clean_pl,
+    load_config,
+)
 
-ef = pd.ExcelFile(fp)
-print('Sheets:', ef.sheet_names)
 
-df_bs = clean_bs('', ef.sheet_names[0], cfg, excel_file=ef)
-huobi = df_bs[df_bs['科目'].str.strip() == '货币资金'][['科目','时间属性','金额']]
-print('\n=== BS 货币资金 ===')
-print(huobi.to_string())
+def _pick_sample() -> str:
+    candidates = []
+    for pattern in ("*月报*.xlsx", "报表*.xlsx", "*.xlsx"):
+        candidates.extend(glob.glob(os.path.join(ROOT, pattern)))
+    candidates = [p for p in candidates if os.path.isfile(p)]
+    candidates.sort(key=lambda p: (os.path.basename(p).lower(), p.lower()))
+    if not candidates:
+        raise RuntimeError("未找到可用于测试的 xlsx 样例")
+    return candidates[0]
 
-df_pl = clean_pl('', ef.sheet_names[1], cfg, excel_file=ef)
-rev = df_pl[df_pl['科目'].str.strip().str.contains('营业收入')][['科目','时间属性','金额']]
-print('\n=== PL 营业收入 ===')
-print(rev.to_string())
 
-df_cf = clean_cf('', ef.sheet_names[2], cfg, excel_file=ef)
-opcf = df_cf[df_cf['科目'].str.strip().str.contains('经营活动产生的现金流量净')][['科目','时间属性','金额']]
-print('\n=== CF 经营净额 ===')
-print(opcf.to_string())
+def _first_sheet_by_type(excel_file: pd.ExcelFile, sheet_type: str) -> str:
+    for sheet_name in excel_file.sheet_names:
+        if _classify_sheet_type(sheet_name) == sheet_type:
+            return sheet_name
+    raise AssertionError(f"未找到 {sheet_type} Sheet: {excel_file.sheet_names}")
 
-print(f'\nBS:{len(df_bs)} PL:{len(df_pl)} CF:{len(df_cf)} - ALL OK')
+
+def _assert_meta_columns(df: pd.DataFrame) -> None:
+    assert not df.empty
+    assert "主体" in df.columns
+    assert "报表口径" in df.columns
+
+
+def main() -> int:
+    cfg = load_config(os.path.join(ROOT, "tools", "report_ingestor", "config.json"))
+    sample = _pick_sample()
+    print("Sample:", sample)
+
+    excel_file = pd.ExcelFile(sample)
+    print("Sheets:", excel_file.sheet_names)
+
+    assert _classify_sheet_type("2603资产负债表") == "BS"
+    assert _classify_sheet_type("母公司利润表") == "PL"
+    assert _classify_sheet_type("合并现金流量表") == "CF"
+
+    bs_sheet = _first_sheet_by_type(excel_file, "BS")
+    pl_sheet = _first_sheet_by_type(excel_file, "PL")
+    cf_sheet = _first_sheet_by_type(excel_file, "CF")
+
+    meta = _infer_header_metadata(excel_file.parse(bs_sheet, header=None))
+    print("Metadata:", meta)
+    assert "主体" in meta
+    assert "报表口径" in meta
+
+    no_caliber_df = pd.DataFrame([["资产负债表", None], ["编制单位:测试有限公司", None], ["项目", "期末余额"]])
+    assert _infer_header_metadata(no_caliber_df)["报表口径"] == ""
+
+    df_bs = clean_bs(sample, bs_sheet, cfg, excel_file=excel_file)
+    df_pl = clean_pl(sample, pl_sheet, cfg, excel_file=excel_file)
+    df_cf = clean_cf(sample, cf_sheet, cfg, excel_file=excel_file)
+    for df in (df_bs, df_pl, df_cf):
+        _assert_meta_columns(df)
+
+    print(f"Rows: BS={len(df_bs)} PL={len(df_pl)} CF={len(df_cf)}")
+    print("OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

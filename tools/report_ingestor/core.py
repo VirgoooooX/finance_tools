@@ -12,7 +12,6 @@ from typing import Optional, Any, Dict, List, Tuple, Iterable
 from dataclasses import asdict
 
 from financial_analyzer_core import AppConfig, AnalysisResult, ProgressCallback
-from financial_analyzer_core import _cleaned_sqlite_path_for as _cleaned_sqlite_path_for_common
 from fa_platform.paths import (
     ensure_dir as _ensure_dir_common,
     default_output_root as _default_output_root_common,
@@ -20,11 +19,9 @@ from fa_platform.paths import (
     resolve_under_base as _resolve_under_base_common,
     get_base_dir as _get_base_dir_common,
 )
-from fa_platform.jsonx import sanitize_json
-from fa_platform.pipeline import build_artifacts as _build_artifacts_common, build_run_dir as _build_run_dir_common, write_sqlite_tables as _write_sqlite_tables_common
+from fa_platform.pipeline import build_artifacts as _build_artifacts_common
 
 _TOOL_ID = os.path.basename(os.path.dirname(__file__))
-_ACTIVE_TOOL_ID = ""
 
 
 def _ensure_dir(path: str) -> None:
@@ -55,58 +52,6 @@ def _get_logger(name: str = "report_ingestor") -> logging.Logger:
         handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%H:%M:%S"))
         logger.addHandler(handler)
     return logger
-
-
-def _json_safe_value(v: Any) -> Any:
-    return sanitize_json(v)
-
-
-
-
-def _tool_params(cfg: AppConfig) -> Dict[str, Any]:
-    tp = getattr(cfg, "tool_params", None)
-    if not isinstance(tp, dict):
-        return {}
-    tid = str(getattr(cfg, "tool_id", "") or "").strip()
-    if tid:
-        bucket = tp.get(tid)
-        if isinstance(bucket, dict):
-            return bucket
-    bucket = tp.get(_TOOL_ID)
-    return bucket if isinstance(bucket, dict) else {}
-
-
-def _get_param(cfg: AppConfig, key: str, default: Any) -> Any:
-    params = _tool_params(cfg)
-    if key in params:
-        return params.get(key)
-    if hasattr(cfg, key):
-        v = getattr(cfg, key)
-        return default if v is None else v
-    return default
-
-
-def _rules_path() -> str:
-    tid = str(_ACTIVE_TOOL_ID or "").strip() or _TOOL_ID
-    try:
-        base = os.path.abspath(_get_base_dir())
-        p = os.path.join(base, "tools", tid, "rules.json")
-        if os.path.exists(p):
-            return p
-    except Exception:
-        pass
-    return os.path.join(os.path.dirname(__file__), "rules.json")
-
-
-def _load_rules() -> Dict[str, Any]:
-    p = _rules_path()
-    if not os.path.exists(p):
-        return {}
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
 
 
 def load_config(path: Optional[str] = None) -> AppConfig:
@@ -159,50 +104,11 @@ def save_config(path: Optional[str], cfg: AppConfig) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-_RULES_CACHE: Dict[str, Any] = {"mtime": None, "data": None, "aliases": None}
-
-
 def _normalize_subject_text(text: Any) -> str:
     s = str(text or "").strip().lower()
     s = s.replace("（", "(").replace("）", ")")
     s = re.sub(r"[\s,，]", "", s)
     return s
-
-
-def _expand_keywords(keywords: List[Any]) -> List[str]:
-    rules = _load_rules()
-    aliases = {}
-    sa = rules.get("subject_aliases")
-    if isinstance(sa, dict):
-        for canon, syns in sa.items():
-            canon_s = str(canon or "").strip()
-            if not canon_s:
-                continue
-            items = [canon_s]
-            if isinstance(syns, list):
-                items.extend([str(x or "").strip() for x in syns if str(x or "").strip()])
-            variants = list(dict.fromkeys(items))
-            for v in variants:
-                aliases.setdefault(_normalize_subject_text(v), set()).update(variants)
-
-    out: List[str] = []
-    seen = set()
-    for kw in (keywords or []):
-        s = str(kw or "").strip()
-        if not s:
-            continue
-        norm = _normalize_subject_text(s)
-        variants = aliases.get(norm)
-        if variants:
-            for v in variants:
-                if v not in seen:
-                    out.append(v)
-                    seen.add(v)
-        else:
-            if s not in seen:
-                out.append(s)
-                seen.add(s)
-    return out
 
 
 def _run_timestamp() -> str:
@@ -216,38 +122,6 @@ def _safe_int_pair(pair: Any) -> Optional[Tuple[int, int]]:
         return int(pair[0]), int(pair[1])
     except Exception:
         return None
-
-
-def _cleaned_sqlite_path_for(cleaned_path: str) -> str:
-    return _cleaned_sqlite_path_for_common(cleaned_path)
-
-
-def _write_cleaned_sqlite(
-    df: pd.DataFrame,
-    sqlite_path: str,
-    df_validation: Optional[pd.DataFrame] = None,
-    df_metrics: Optional[pd.DataFrame] = None,
-) -> None:
-    _write_sqlite_tables_common(sqlite_path, df, validation=df_validation, metrics=df_metrics)
-
-
-def _df_preview_records(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
-    if df is None or df.empty:
-        return []
-    df2 = df.head(int(limit)).copy()
-    try:
-        df2 = df2.astype(object)
-    except Exception:
-        pass
-    for c in df2.columns:
-        try:
-            df2[c] = pd.Series([_json_safe_value(x) for x in df2[c].tolist()], dtype="object")
-        except Exception:
-            try:
-                df2[c] = df2[c].apply(_json_safe_value).astype(object)
-            except Exception:
-                df2[c] = df2[c].astype(str)
-    return df2.to_dict(orient="records")
 
 
 def _is_date_like(date_val: Any) -> bool:
@@ -393,28 +267,137 @@ def clean_date_str(date_val):
     return text.split(" ")[0]
 
 
-def _split_tokens(v: Any) -> List[str]:
-    if v is None:
-        return []
-    if isinstance(v, list):
-        out: List[str] = []
-        for x in v:
-            s = str(x or "").strip()
-            if s:
-                out.append(s)
-        return out
+_SUBJECT_LABELS = ("编制单位", "编报单位", "填报单位", "单位名称", "公司名称", "企业名称", "纳税人名称", "会计主体")
+_SUBJECT_SUFFIXES = ("有限公司", "有限责任公司", "股份有限公司", "集团", "公司", "厂", "中心", "合作社", "合伙企业", "事务所")
+
+
+def _meta_cell_text(v: Any) -> str:
+    try:
+        if v is None or pd.isna(v):
+            return ""
+    except Exception:
+        pass
     s = str(v or "").strip()
-    if not s:
+    if not s or s.lower() == "nan":
+        return ""
+    return s.replace("：", ":").replace("　", " ")
+
+
+def _header_rows(df: pd.DataFrame, max_rows: int = 12, max_cols: int = 8) -> List[List[str]]:
+    rows: List[List[str]] = []
+    try:
+        rmax = min(int(max_rows), int(df.shape[0]))
+        cmax = min(int(max_cols), int(df.shape[1]))
+        for r in range(rmax):
+            row: List[str] = []
+            for c in range(cmax):
+                row.append(_meta_cell_text(df.iat[r, c]))
+            rows.append(row)
+    except Exception:
         return []
-    if "," in s or "，" in s:
-        parts = re.split(r"[,\uFF0C]+", s)
-        out = [p.strip() for p in parts if p.strip()]
-        return out
-    return [s]
+    return rows
+
+
+def _clean_subject_candidate(text: Any) -> str:
+    s = _meta_cell_text(text)
+    if not s:
+        return ""
+    s = re.sub(r"\s+", "", s)
+    for label in _SUBJECT_LABELS:
+        s = re.sub(rf"^{re.escape(label)}[:：]?", "", s)
+    s = re.split(r"(?:金额)?单位[:：]?元|会计期间|报表日期|日期[:：]?|统一社会信用代码", s, maxsplit=1)[0]
+    s = s.strip(" :-_;,，。")
+    if not s:
+        return ""
+    if any(x in s for x in ("资产负债表", "利润表", "现金流量表", "科目", "项目", "金额")):
+        return ""
+    if re.fullmatch(r"[\d./年月日 -]+", s):
+        return ""
+    return s
+
+
+def _looks_like_subject(text: str) -> bool:
+    s = _clean_subject_candidate(text)
+    if len(s) < 2:
+        return False
+    if any(s.endswith(x) or x in s for x in _SUBJECT_SUFFIXES):
+        return True
+    return len(s) >= 4 and not re.search(r"\d", s)
+
+
+def _infer_subject_from_header(rows: List[List[str]]) -> str:
+    for row in rows:
+        for idx, cell in enumerate(row):
+            if not cell:
+                continue
+            if any(label in cell for label in _SUBJECT_LABELS):
+                cand = _clean_subject_candidate(cell)
+                if _looks_like_subject(cand):
+                    return cand
+                for nxt in row[idx + 1 : idx + 4]:
+                    cand = _clean_subject_candidate(nxt)
+                    if _looks_like_subject(cand):
+                        return cand
+    return ""
+
+
+def _infer_caliber_from_header(rows: List[List[str]]) -> str:
+    text = " ".join(cell for row in rows for cell in row if cell)
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return ""
+
+    single_patterns = (
+        r"单体.{0,8}(报表|口径|资产负债表|利润表|现金流量表|财务报表)",
+        r"(母公司|本部|个别).{0,8}(报表|口径|资产负债表|利润表|现金流量表|财务报表)",
+        r"(报表|口径|资产负债表|利润表|现金流量表|财务报表).{0,8}(单体|母公司|本部|个别)",
+    )
+    merged_patterns = (
+        r"合并.{0,8}(报表|口径|资产负债表|利润表|现金流量表|财务报表)",
+        r"(报表|口径|资产负债表|利润表|现金流量表|财务报表).{0,8}合并",
+    )
+    single_score = sum(1 for p in single_patterns if re.search(p, compact))
+    merged_score = sum(1 for p in merged_patterns if re.search(p, compact))
+    if single_score > merged_score:
+        return "单体"
+    if merged_score > single_score:
+        return "合并"
+    return ""
+
+
+def _infer_header_metadata(df: pd.DataFrame) -> Dict[str, str]:
+    rows = _header_rows(df)
+    return {
+        "主体": _infer_subject_from_header(rows),
+        "报表口径": _infer_caliber_from_header(rows),
+    }
 
 
 # Sheet 名称 -> 报表类型的固定映射
 _SHEET_TYPE_MAP = {"资产负债表": "BS", "利润表": "PL", "现金流量表": "CF"}
+
+
+def _normalize_sheet_name(sheet_name: Any) -> str:
+    s = str(sheet_name or "").strip().lower()
+    s = s.replace("（", "(").replace("）", ")").replace("\u3000", " ")
+    return re.sub(r"\s+", "", s)
+
+
+def _classify_sheet_type(sheet_name: Any) -> str:
+    raw = str(sheet_name or "").strip()
+    if raw in _SHEET_TYPE_MAP:
+        return _SHEET_TYPE_MAP[raw]
+
+    s = _normalize_sheet_name(raw)
+    if not s:
+        return ""
+    if "资产负债" in s:
+        return "BS"
+    if "现金流" in s:
+        return "CF"
+    if "利润表" in s or "损益表" in s:
+        return "PL"
+    return ""
 
 
 def _derive_period_id(report_date: Any) -> str:
@@ -442,13 +425,6 @@ def _extract_period_id_from_filename(filename: str) -> str:
     mm = m4.group(0)[2:4]
     yyyy = 2000 + y2 if y2 <= 79 else 1900 + y2
     return f"{yyyy}{mm}"
-
-
-def _report_date_from_period_id(period_id: str) -> str:
-    pid = str(period_id or "").strip()
-    if re.match(r"^(?:19|20)\d{2}(?:0[1-9]|1[0-2])$", pid):
-        return f"{pid[:4]}-{pid[4:6]}-01"
-    return ""
 
 
 def _classify_amount(v: Any) -> Tuple[Optional[float], str, str]:
@@ -724,6 +700,7 @@ def clean_bs(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+        meta = _infer_header_metadata(df)
         date_val = _read_date_from_cells(df, [[1, 0], [1, 3]])
         report_date = clean_date_str(date_val)
         header_row = _find_header_row(df, "期末余额")
@@ -751,8 +728,10 @@ def clean_bs(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         df_final["期间"] = period_id
         df_final["年份"] = str(period_id or "")[:4] if period_id else ""
         df_final["来源Sheet"] = sheet_name
+        df_final["报表口径"] = meta.get("报表口径") or "未知"
+        df_final["主体"] = meta.get("主体") or ""
         if logger:
-            logger.info(f"BS-合并 处理完成: {sheet_name}, 提取 {len(df_final)} 行")
+            logger.info(f"BS 处理完成: {sheet_name}, 提取 {len(df_final)} 行")
         return df_final
     except Exception as e:
         if logger:
@@ -765,6 +744,7 @@ def clean_pl(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+        meta = _infer_header_metadata(df)
         date_val = _read_date_from_cells(df, [[1, 0], [1, 3]])
         report_date = clean_date_str(date_val)
         header_row = _find_header_row(df, "本期金额")
@@ -781,6 +761,8 @@ def clean_pl(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         df_final["期间"] = period_id
         df_final["年份"] = str(period_id or "")[:4] if period_id else ""
         df_final["来源Sheet"] = sheet_name
+        df_final["报表口径"] = meta.get("报表口径") or "未知"
+        df_final["主体"] = meta.get("主体") or ""
         if logger:
             logger.info(f"PL 处理完成: {sheet_name}, 提取 {len(df_final)} 行")
         return df_final
@@ -795,6 +777,7 @@ def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         logger.info(f"正在处理: {sheet_name} ...")
     try:
         df = excel_file.parse(sheet_name=sheet_name, header=None) if excel_file else pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+        meta = _infer_header_metadata(df)
         date_val = _read_date_from_cells(df, [[1, 0], [1, 3]])
         report_date = clean_date_str(date_val)
         header_row = _find_header_row(df, "本期金额")
@@ -813,6 +796,8 @@ def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         df_final["期间"] = period_id
         df_final["年份"] = str(period_id or "")[:4] if period_id else ""
         df_final["来源Sheet"] = sheet_name
+        df_final["报表口径"] = meta.get("报表口径") or "未知"
+        df_final["主体"] = meta.get("主体") or ""
         if logger:
             logger.info(f"CF 处理完成: {sheet_name}, 提取 {len(df_final)} 行")
         return df_final
@@ -820,127 +805,6 @@ def clean_cf(file_path, sheet_name, cfg: AppConfig, logger: Optional[logging.Log
         if logger:
             logger.error(f"{sheet_name} 处理失败: {e}")
         return pd.DataFrame()
-
-
-def extract_amount_info(df, keywords, sheet_type=None, time_attr=None, category=None) -> Tuple[float, bool, str]:
-    filtered_df = df.copy()
-    if sheet_type:
-        filtered_df = filtered_df[filtered_df["报表类型"] == sheet_type]
-    if time_attr:
-        filtered_df = filtered_df[filtered_df["时间属性"] == time_attr]
-    if category:
-        filtered_df = filtered_df[filtered_df["大类"] == category]
-    if filtered_df.empty or "科目" not in filtered_df.columns or "金额" not in filtered_df.columns:
-        return 0.0, False, ""
-    subjects_norm = filtered_df["科目"].astype(str).map(_normalize_subject_text)
-    expanded = _expand_keywords(list(keywords or []))
-    for keyword in expanded:
-        kw_norm = _normalize_subject_text(keyword)
-        if not kw_norm:
-            continue
-        exact_mask = subjects_norm == kw_norm
-        if exact_mask.any():
-            row = filtered_df.loc[exact_mask].iloc[0]
-            return float(row["金额"]), True, str(row["科目"])
-    for keyword in expanded:
-        kw_norm = _normalize_subject_text(keyword)
-        if not kw_norm:
-            continue
-        contain_mask = subjects_norm.str.contains(re.escape(kw_norm), na=False)
-        if contain_mask.any():
-            candidates = filtered_df.loc[contain_mask, ["科目", "金额"]].copy()
-            candidates["__len"] = candidates["科目"].astype(str).map(lambda x: len(_normalize_subject_text(x)))
-            candidates = candidates.sort_values("__len", ascending=True)
-            row = candidates.iloc[0]
-            return float(row["金额"]), True, str(row["科目"])
-    return 0.0, False, ""
-
-
-def extract_amount(df, keywords, sheet_type=None, time_attr=None, category=None):
-    val, found, _ = extract_amount_info(df, keywords, sheet_type=sheet_type, time_attr=time_attr, category=category)
-    return val if found else 0.0
-
-
-def validate_balance_sheet(df_group, tolerance: float = 0.01, time_attr: str = "期末余额", assets_keywords=None, liabilities_keywords=None, equity_keywords=None):
-    assets, af, _ = extract_amount_info(df_group, assets_keywords or ["资产总计", "资产总额", "资产合计"], sheet_type="资产负债表", time_attr=time_attr, category="资产")
-    liabilities, lf, _ = extract_amount_info(df_group, liabilities_keywords or ["负债合计", "负债总计", "负债总额"], sheet_type="资产负债表", time_attr=time_attr, category="负债及权益")
-    equity, ef, _ = extract_amount_info(df_group, equity_keywords or ["所有者权益合计", "股东权益合计", "权益合计"], sheet_type="资产负债表", time_attr=time_attr, category="负债及权益")
-    if not (af and lf and ef):
-        return {"验证项目": "BS表资产=负债+权益验证", "时间属性": time_attr, "差额": None, "是否平衡": "否", "验证结果": "数据缺失"}
-    diff = abs(assets - (liabilities + equity))
-    is_balanced = diff <= tolerance
-    return {"验证项目": "BS表资产=负债+权益验证", "时间属性": time_attr, "差额": diff, "是否平衡": "是" if is_balanced else "否", "验证结果": "通过" if is_balanced else f"不平衡(差额:{diff:.2f})"}
-
-
-def validate_bs_pl_balance(df_group, tolerance: float = 0.01) -> Dict[str, Any]:
-    re_begin, rb_f, _ = extract_amount_info(df_group, ["未分配利润"], sheet_type="资产负债表", time_attr="年初余额", category="负债及权益")
-    re_end, re_f, _ = extract_amount_info(df_group, ["未分配利润"], sheet_type="资产负债表", time_attr="期末余额", category="负债及权益")
-    np, np_f, _ = extract_amount_info(df_group, ["归属于母公司所有者的净利润", "归属于母公司股东的净利润"], sheet_type="利润表", time_attr="本年累计金额")
-    if not (rb_f and re_f and np_f):
-        return {"验证项目": "BS表与PL表平衡验证", "时间属性": "年初/期末 vs 本年累计", "差额": None, "是否平衡": "否", "验证结果": "数据缺失"}
-    diff = abs((re_end - re_begin) - np)
-    is_balanced = diff <= tolerance
-    return {"验证项目": "BS表与PL表平衡验证", "时间属性": "年初/期末 vs 本年累计", "差额": diff, "是否平衡": "是" if is_balanced else "否", "验证结果": "通过" if is_balanced else f"不平衡(差额:{diff:.2f})"}
-
-
-def validate_bs_cf_balance(df_group, tolerance: float = 0.01) -> Dict[str, Any]:
-    bank_end, bf, _ = extract_amount_info(df_group, ["银行存款"], sheet_type="资产负债表", time_attr="期末余额", category="资产")
-    cf_end, cf_f, _ = extract_amount_info(df_group, ["期末现金及现金等价物余额", "期末现金及现金等价物余额(附注)"], sheet_type="现金流量表", time_attr="本年累计金额")
-    if not (bf and cf_f):
-        return {"验证项目": "BS表与CF表平衡验证", "时间属性": "期末余额 vs 本年累计", "差额": None, "是否平衡": "否", "验证结果": "数据缺失"}
-    diff = abs(bank_end - cf_end)
-    is_balanced = diff <= tolerance
-    return {"验证项目": "BS表与CF表平衡验证", "时间属性": "期末余额 vs 本年累计", "差额": diff, "是否平衡": "是" if is_balanced else "否", "验证结果": "通过" if is_balanced else f"不平衡(差额:{diff:.2f})"}
-
-
-def _format_percent(val: Optional[float]) -> Optional[str]:
-    try:
-        return f"{float(val) * 100:.2f}%" if val is not None else None
-    except Exception:
-        return None
-
-
-def _round_number(val: Optional[float], digits: int = 2) -> Optional[float]:
-    try:
-        return round(float(val), int(digits)) if val is not None else None
-    except Exception:
-        return None
-
-
-def _safe_div(n: float, d: float) -> Optional[float]:
-    return n / d if d != 0 else None
-
-
-def calculate_financial_metrics(df_group):
-    rules = _load_rules()
-    metrics_def = rules.get("metrics", [])
-    variables_def = rules.get("variables", {})
-    var_values = {}
-    if variables_def:
-        for var_name, var_rule in variables_def.items():
-            val = extract_amount(df_group, var_rule.get("keywords", []), sheet_type=var_rule.get("sheet_type"), time_attr=var_rule.get("time_attr"), category=var_rule.get("category"))
-            var_values[var_name] = val
-
-    if not metrics_def:
-        return {}
-
-    metrics = {}
-    context = {"safe_div": _safe_div, "abs": abs, "round": round, "max": max, "min": min, **var_values}
-    for m in metrics_def:
-        name, formula, fmt = m.get("name"), m.get("formula"), m.get("format")
-        if not name or not formula:
-            continue
-        try:
-            val = eval(formula, {"__builtins__": {}}, context)
-        except Exception:
-            val = None
-        if fmt == "percent":
-            metrics[name] = _format_percent(val)
-        elif fmt == "round2":
-            metrics[name] = _round_number(val, 2)
-        else:
-            metrics[name] = val
-    return metrics
 
 
 def _list_excel_files(cfg: AppConfig) -> List[str]:
@@ -955,18 +819,6 @@ def _list_excel_files(cfg: AppConfig) -> List[str]:
         files = [p for p in files if os.path.abspath(p) not in exclude]
     files.sort(key=lambda p: p.lower())
     return files
-
-
-def _pick_sheet_name(df_group: pd.DataFrame, sheet_type: str) -> str:
-    if df_group is None or df_group.empty:
-        return ""
-    try:
-        sub = df_group[df_group["报表类型"] == sheet_type]
-        if sub.empty:
-            return ""
-        return str(sub["来源Sheet"].mode(dropna=False).iat[0])
-    except Exception:
-        return ""
 
 
 def run_analysis(
@@ -987,8 +839,6 @@ def run_analysis(
 
     stamp = _run_timestamp()
     tool_id = str(getattr(cfg, "tool_id", "")).strip() or os.path.basename(os.path.dirname(__file__))
-    global _ACTIVE_TOOL_ID
-    _ACTIVE_TOOL_ID = tool_id
     result.run_id = stamp
     tool_dir = os.path.abspath(os.path.join(output_root, tool_id)) if tool_id else os.path.abspath(output_root)
     _ensure_dir(tool_dir)
@@ -1021,13 +871,16 @@ def run_analysis(
             try:
                 all_sheets = excel_file.sheet_names
                 file_sheets_data: List[pd.DataFrame] = []
+                recognized_sheets: List[str] = []
+                empty_sheets: List[str] = []
                 for sheet_name in (all_sheets or []):
                     if cancel_event and cancel_event.is_set():
                         result.cancelled = True
                         return result
-                    st = _SHEET_TYPE_MAP.get(sheet_name)
+                    st = _classify_sheet_type(sheet_name)
                     if not st:
                         continue
+                    recognized_sheets.append(str(sheet_name))
                     df: Optional[pd.DataFrame] = None
                     if st == "BS":
                         df = clean_bs(file_path, sheet_name, cfg, logger, excel_file=excel_file)
@@ -1036,11 +889,18 @@ def run_analysis(
                     elif st == "CF":
                         df = clean_cf(file_path, sheet_name, cfg, logger, excel_file=excel_file)
                     if df is None or df.empty:
+                        empty_sheets.append(str(sheet_name))
                         continue
                     if file_period_id:
                         df["期间"] = file_period_id
                         df["年份"] = str(file_period_id)[:4]
                     file_sheets_data.append(df)
+
+                if not recognized_sheets and logger:
+                    preview = ", ".join([str(x) for x in (all_sheets or [])[:8]])
+                    logger.warning(f"{base_name} 未识别到三大报表Sheet；前几个Sheet: {preview}")
+                elif empty_sheets and logger:
+                    logger.warning(f"{base_name} 以下报表Sheet未提取到有效行: {', '.join(empty_sheets)}")
 
                 if file_sheets_data:
                     file_data = pd.concat(file_sheets_data, ignore_index=True)
@@ -1048,11 +908,13 @@ def run_analysis(
                     if "报表版本" not in file_data.columns:
                         file_data["报表版本"] = "月度"
                     if "报表口径" not in file_data.columns:
-                        file_data["报表口径"] = "合并"
+                        file_data["报表口径"] = "未知"
                     if "主体" not in file_data.columns:
                         file_data["主体"] = ""
                     all_files_data.append(file_data)
                     result.processed_files += 1
+                elif recognized_sheets and logger:
+                    logger.warning(f"{base_name} 已识别报表Sheet但未生成清洗数据")
             finally:
                 excel_file.close()
         except Exception as e:
@@ -1068,7 +930,7 @@ def run_analysis(
     all_data = pd.concat(all_files_data, ignore_index=True)
 
     if "报表口径" not in all_data.columns:
-        all_data["报表口径"] = "合并"
+        all_data["报表口径"] = "未知"
     if "报表版本" not in all_data.columns:
         all_data["报表版本"] = "月度"
     if "主体" not in all_data.columns:
