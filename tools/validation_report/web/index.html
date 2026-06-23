@@ -50,7 +50,7 @@
         <div class="card-body">
           <div class="grid grid-cols-3">
             <div class="form-group">
-              <label class="form-label">查看 run</label>
+              <label class="form-label">清洗源批次</label>
               <div class="d-flex gap-2">
                 <select id="viewRunId" class="form-select"></select>
                 <button class="btn btn-secondary btn-sm" id="btnReloadRuns">刷新</button>
@@ -66,6 +66,8 @@
               <div id="outSqlite" class="text-mono"></div>
             </div>
           </div>
+          <div id="runWarnings" class="text-mono" style="margin-top: .75rem; color: var(--warning); font-size: .85rem;"></div>
+          <div id="runArtifacts" style="margin-top: .75rem;"></div>
         </div>
       </div>
 
@@ -218,40 +220,74 @@
       const el = document.getElementById('viewRunId');
       return String(el?.value || '').trim();
     }
+    function getSourceToolId() {
+      return String(document.getElementById('source_tool_id')?.value || 'report_ingestor').trim() || 'report_ingestor';
+    }
     function setRunMeta(info) {
       const el = document.getElementById('runMeta');
       const rid = String(info?.run_id || '').trim();
       const ts = String(info?.finished_at || info?.started_at || '').trim();
       const status = String(info?.status || '').trim();
-      el.innerText = rid ? `当前：${rid}${ts ? ` | ${ts}` : ''}${status ? ` | ${status}` : ''}` : '';
+      el.innerText = rid ? `当前源批次：${rid}${ts ? ` | ${ts}` : ''}${status ? ` | ${status}` : ''}` : '';
+    }
+    function renderRunMessages(res) {
+      const warnEl = document.getElementById('runWarnings');
+      const warnings = Array.isArray(res?.warnings) ? res.warnings.filter(Boolean) : [];
+      warnEl.innerHTML = '';
+      if (warnings.length) {
+        warnEl.innerText = '告警：\n' + warnings.map(x => `- ${x}`).join('\n');
+      }
+      const artEl = document.getElementById('runArtifacts');
+      const artifacts = Array.isArray(res?.artifacts) ? res.artifacts : [];
+      artEl.innerHTML = '';
+      if (!artifacts.length) return;
+      for (const a of artifacts) {
+        const path = String(a?.path || '').trim();
+        if (!path) continue;
+        const row = document.createElement('div');
+        row.className = 'd-flex gap-2 align-items-center';
+        row.style.marginTop = '.35rem';
+        const label = document.createElement('div');
+        label.className = 'text-mono flex-1';
+        label.style.cssText = 'color: var(--text-secondary); overflow:hidden; text-overflow:ellipsis;';
+        label.innerText = `${a?.name || a?.kind || '产物'}：${path}`;
+        const btnOpen = document.createElement('button');
+        btnOpen.className = 'btn btn-secondary btn-sm';
+        btnOpen.innerText = '打开';
+        btnOpen.addEventListener('click', () => openArtifact(path));
+        const btnDown = document.createElement('button');
+        btnDown.className = 'btn btn-secondary btn-sm';
+        btnDown.innerText = '下载';
+        btnDown.addEventListener('click', () => downloadArtifact(path));
+        row.appendChild(label);
+        row.appendChild(btnOpen);
+        row.appendChild(btnDown);
+        artEl.appendChild(row);
+      }
+    }
+    async function openArtifact(path) {
+      if (!path) return;
+      try { await apiCall('/api/artifacts/open', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path}) }); } catch {}
+    }
+    function downloadArtifact(path) {
+      if (!path) return;
+      window.open('/api/artifacts/download?path=' + encodeURIComponent(path), '_blank');
     }
     async function loadRuns(force) {
       const sel = document.getElementById('viewRunId');
       const prev = String(sel?.value || '').trim();
       let runs = [];
       try {
-        const data = await apiCall('/api/runs?limit=200');
+        const data = await apiCall('/api/source-runs?source_tool_id=' + encodeURIComponent(getSourceToolId()) + '&limit=200');
         runs = data?.runs || [];
       } catch {}
       _setRunOptions(sel, runs);
-      let activeRunId = '';
-      let activeInfo = null;
-      try {
-        const active = await apiCall('/api/run/active');
-        activeInfo = active?.run || null;
-        activeRunId = String(activeInfo?.run_id || '').trim();
-      } catch {}
       const validIds = new Set((runs || []).map(r => String(r?.run_id || '').trim()).filter(Boolean));
       if (prev && validIds.has(prev)) sel.value = prev;
-      else if (activeRunId && validIds.has(activeRunId)) sel.value = activeRunId;
       else sel.value = '';
-      setRunMeta(activeInfo);
-      if (force) {
-        const rid = getSelectedRunId();
-        if (rid) {
-          try { await apiCall('/api/run/select?run_id=' + encodeURIComponent(rid), { method: 'POST' }); } catch {}
-        }
-      }
+      const rid = getSelectedRunId();
+      const info = rid ? (runs || []).find(r => String(r?.run_id || '').trim() === rid) : ((runs || [])[0] || null);
+      setRunMeta(info);
     }
 
     async function loadValidationSummary() {
@@ -259,6 +295,7 @@
         const qs = new URLSearchParams();
         const rid = getSelectedRunId();
         if (rid) qs.set('run_id', rid);
+        qs.set('source_tool_id', getSourceToolId());
         const res = await apiCall('/api/validation/summary?' + qs.toString());
         const tbody = document.getElementById('validationSummaryBody');
         tbody.innerHTML = '';
@@ -284,6 +321,7 @@
       const bal = document.getElementById('vIsBalanced').value;
       if (bal) qs.set('is_balanced', bal);
       qs.set('limit', '200');
+      qs.set('source_tool_id', getSourceToolId());
       const rid = getSelectedRunId();
       if (rid) qs.set('run_id', rid);
       try {
@@ -296,6 +334,7 @@
     async function loadValidationDetail() {
       const qs = new URLSearchParams();
       qs.set('limit', '2000');
+      qs.set('source_tool_id', getSourceToolId());
       const rid = getSelectedRunId();
       if (rid) qs.set('run_id', rid);
       try {
@@ -314,10 +353,6 @@
     document.getElementById('btnSaveCfg').addEventListener('click', saveCfg);
     document.getElementById('btnReloadRuns').addEventListener('click', () => refreshResults());
     document.getElementById('viewRunId').addEventListener('change', async () => {
-      const rid = getSelectedRunId();
-      if (rid) {
-        try { await apiCall('/api/run/select?run_id=' + encodeURIComponent(rid), { method: 'POST' }); } catch {}
-      }
       refreshResults();
     });
     document.getElementById('btnQueryValidation').addEventListener('click', queryValidation);
@@ -329,6 +364,7 @@
           const res = data.result || {};
           document.getElementById('outValidation').innerText = res.validation_path || '';
           document.getElementById('outSqlite').innerText = res.cleaned_sqlite_path || '';
+          renderRunMessages(res);
           renderTable(document.getElementById('tblHead'), document.getElementById('tblBody'), res.validation_preview || [], ['源文件', '期间', '验证项目', '差额', '是否平衡', '验证结果']);
           refreshResults();
         }

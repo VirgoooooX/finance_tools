@@ -9,11 +9,14 @@
 平台化的核心点：
 - 统一入口：一个 Web Shell 管理工具切换、日志流、开始/停止与状态展示
 - 插件化扩展：新增工具只需新增一个 `tools/<tool_id>/` 目录并注册
-- 数据可查询：清洗结果会写入 SQLite（`data/*.sqlite`），Web 端支持筛选/聚合/导出
+- 数据可查询：清洗结果会写入累计库（`data/warehouse.sqlite`），Web 端支持筛选/聚合/导出
 - 输出可追溯：每次运行生成时间戳目录，并写入 Run Index（`data/run_index.sqlite`）
 
 当前内置工具：
 - `report_ingestor`：报表清洗与落库（可选：验证、指标、累计库查询）
+- `validation_report`：基于清洗源批次生成验证报告
+- `financial_metrics`：基于清洗源批次生成财务指标
+- `payment_monitor`：收款进度监控
 
 ## 架构与目录结构
 
@@ -27,7 +30,10 @@ root/
 │   └── run_index.py              Run Index（data/run_index.sqlite）
 ├── tools/                        工具插件目录
 │   ├── builtin_tools.py          内置工具注册
-│   └── report_ingestor/
+│   ├── report_ingestor/
+│   ├── validation_report/
+│   ├── financial_metrics/
+│   └── payment_monitor/
 ├── web/                          全局 Web Shell 与样式
 ├── financial_analyzer_web.py     Web 服务（FastAPI）
 ├── financial_analyzer_core.py    配置类型/工具注册表/命令行入口函数 main()
@@ -104,12 +110,18 @@ Web 端保存配置时：
 ## 输出与数据目录
 
 ### 输出目录（可追溯）
-默认输出在 `output/<tool_id>/<YYYYMMDD_HHMMSS>/`。
+默认输出在 `output/<tool_id>/` 下。不同工具可继续细分为 `monthly/` 或 `<YYYYMMDD_HHMMSS>/`，每次运行会通过 Run Index 记录实际产物路径。
 
 ### 数据目录（可查询 + 可追溯）
 默认落地到 `data/`：
-- `data/*_<YYYYMMDD_HHMMSS>.sqlite`：清洗结果/验证/指标表
-- `data/run_index.sqlite`：Run Index（记录每次运行的结果路径、行数、参数快照等）
+- `data/warehouse.sqlite`：累计财务数据仓库，包含清洗表、验证结果、指标结果等
+- `data/run_index.sqlite`：Run Index（记录每次运行的状态、告警、产物、输入/输出快照等）
+
+### 运行历史与源批次
+- `/api/runs?tool_id=<tool_id>`：返回指定工具自己的运行历史
+- `/api/source-runs?source_tool_id=report_ingestor`：返回可供验证/指标等下游工具选择的清洗源批次
+- `/api/artifacts/download?path=...`：下载 `data/` 或各工具 `output_dir` 下的产物
+- `/api/artifacts/open`：在服务端本机打开产物路径；如果服务开放给局域网其他机器，打开动作仍发生在运行服务的那台机器上
 
 ## 打包成 EXE
 
@@ -119,7 +131,7 @@ Web 端保存配置时：
 py build_exe.py
 ```
 
-注意：当前 build_exe.py 仍引用 `financial_analyzer.py` 作为入口文件；如果仓库中不存在该文件，需要先调整打包脚本入口再执行。
+默认入口为 `financial_analyzer_web.py`，可用 `--entry` 覆盖。
 
 打包产物：
 - `dist/财务数据分析工具.exe`
@@ -127,5 +139,9 @@ py build_exe.py
 运行说明：
 - 双击 EXE 会启动本机 Web（默认监听 `127.0.0.1`）
 - 输出默认落在 EXE 同级目录的 `output/` 与 `data/`
+
+## 本机与局域网访问
+
+默认建议本机运行：`host='127.0.0.1'`。如果需要让局域网其他机器访问，可以启动时使用 `host='0.0.0.0'` 并放行防火墙端口。第一阶段不包含账号/权限系统，因此只建议在可信内网临时开放。
 
 更多开发规范见：DEVELOPMENT_GUIDE_ZH.md

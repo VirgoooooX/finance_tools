@@ -6,7 +6,7 @@ import queue
 import threading
 import logging
 from dataclasses import asdict
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Tuple
 import sqlite3
 
 import pandas as pd
@@ -492,111 +492,213 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     def api_runs(tool_id: str = "", limit: int = 50) -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
         lim = int(max(1, min(int(limit or 50), 500)))
-        base_dir = os.path.abspath(get_base_dir())
-        sp = os.path.abspath(os.path.join(base_dir, "data", "warehouse.sqlite"))
-        if not sp or not os.path.exists(sp):
-            return sanitize_json({"ok": True, "tool_id": tid, "runs": []})
-
         try:
-            with sqlite3.connect(sp) as conn:
-                if tid == "report_ingestor":
-                    try:
-                        cur = conn.execute(
-                            """
-                            SELECT batch_id, created_at, mode
-                            FROM import_batch
-                            WHERE tool_id = ?
-                            ORDER BY created_at DESC, batch_id DESC
-                            LIMIT ?
-                            """,
-                            (tid, lim),
-                        )
-                        rows = cur.fetchall() or []
-                    except Exception:
-                        rows = []
-                    runs = [
-                        {
-                            "tool_id": tid,
-                            "run_id": str(r[0] or "").strip(),
-                            "started_at": str(r[1] or "").strip(),
-                            "finished_at": str(r[1] or "").strip(),
-                            "status": str(r[2] or "ok").strip() or "ok",
-                            "cleaned_rows": 0,
-                            "processed_files": 0,
-                            "errors": [],
-                            "meta": {},
-                        }
-                        for r in rows
-                        if r and str(r[0] or "").strip()
-                    ]
-                    return sanitize_json({"ok": True, "tool_id": tid, "runs": runs})
+            from fa_platform.run_index import list_runs
+            runs = list_runs(tid, limit=lim)
+            return sanitize_json({"ok": True, "tool_id": tid, "runs": runs})
+        except Exception as e:
+            return sanitize_json({"ok": False, "message": str(e), "tool_id": tid, "runs": []})
 
-                if tid == "validation_report":
-                    try:
-                        cur = conn.execute(
-                            """
-                            SELECT DISTINCT source_run_id
-                            FROM warehouse_validation
-                            WHERE tool_id = ?
-                            ORDER BY source_run_id DESC
-                            LIMIT ?
-                            """,
-                            (tid, lim),
-                        )
-                        rows = cur.fetchall() or []
-                    except Exception:
-                        rows = []
-                    runs = [
-                        {
-                            "tool_id": tid,
-                            "run_id": str(r[0] or "").strip(),
-                            "started_at": str(r[0] or "").strip(),
-                            "finished_at": str(r[0] or "").strip(),
-                            "status": "ok",
-                            "cleaned_rows": 0,
-                            "processed_files": 0,
-                            "errors": [],
-                            "meta": {},
-                        }
-                        for r in rows
-                        if r and str(r[0] or "").strip()
-                    ]
-                    return sanitize_json({"ok": True, "tool_id": tid, "runs": runs})
+    def _artifact_allowed_roots() -> List[str]:
+        base_dir = os.path.abspath(get_base_dir())
+        roots: List[str] = [os.path.abspath(_default_data_root())]
+        try:
+            tool_ids = [str(t.get("id") or "").strip() for t in list_tools()]
+        except Exception:
+            tool_ids = []
+        for tid in [x for x in tool_ids if x]:
+            try:
+                cfg = runner.get_config(tool_id=tid)
+                out_dir = str(getattr(cfg, "output_dir", "") or "").strip() or "output"
+                if os.path.isabs(out_dir):
+                    root = os.path.abspath(out_dir)
+                else:
+                    root = os.path.abspath(os.path.join(base_dir, out_dir))
+                if root == base_dir:
+                    root = os.path.abspath(os.path.join(root, "output"))
+                roots.append(root)
+            except Exception:
+                pass
+        out: List[str] = []
+        seen = set()
+        for root in roots:
+            key = os.path.normcase(os.path.abspath(root))
+            if key and key not in seen:
+                seen.add(key)
+                out.append(os.path.abspath(root))
+        return out
 
-                if tid == "financial_metrics":
-                    try:
-                        cur = conn.execute(
-                            """
-                            SELECT DISTINCT source_run_id
-                            FROM warehouse_metrics
-                            WHERE tool_id = ?
-                            ORDER BY source_run_id DESC
-                            LIMIT ?
-                            """,
-                            (tid, lim),
-                        )
-                        rows = cur.fetchall() or []
-                    except Exception:
-                        rows = []
-                    runs = [
+    def _is_under_dir(path: str, root: str) -> bool:
+        try:
+            p = os.path.normcase(os.path.abspath(path))
+            r = os.path.normcase(os.path.abspath(root))
+            return os.path.commonpath([p, r]) == r
+        except Exception:
+            return False
+
+    def _resolve_safe_artifact_path(raw_path: str, must_be_file: bool = True) -> Tuple[str, Optional[str]]:
+        raw = str(raw_path or "").strip()
+        if not raw:
+            return "", "路径不能为空"
+        path = os.path.abspath(raw)
+        if not os.path.exists(path):
+            return path, "文件不存在"
+        if must_be_file and not os.path.isfile(path):
+            return path, "不是可下载文件"
+        if not any(_is_under_dir(path, root) for root in _artifact_allowed_roots()):
+            return path, "拒绝访问该路径"
+        return path, None
+
+    def _artifact_media_type(path: str) -> str:
+        low = str(path or "").lower()
+        if low.endswith(".xlsx"):
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if low.endswith(".sqlite") or low.endswith(".db"):
+            return "application/x-sqlite3"
+        if low.endswith(".csv"):
+            return "text/csv"
+        return "application/octet-stream"
+
+    def _list_warehouse_source_batches(source_tool_id: str, limit: int) -> List[Dict[str, Any]]:
+        sid = str(source_tool_id or "report_ingestor").strip() or "report_ingestor"
+        lim = int(max(1, min(int(limit or 50), 500)))
+        sp = os.path.abspath(os.path.join(_default_data_root(), "warehouse.sqlite"))
+        if not os.path.exists(sp):
+            return []
+        try:
+            conn = sqlite3.connect(sp, check_same_thread=False)
+            try:
+                cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='import_batch'")
+                if not cur.fetchone():
+                    return []
+                cur = conn.execute(
+                    """
+                    SELECT
+                      ib.batch_id,
+                      COALESCE(ib.tool_id, ?) AS tool_id,
+                      COALESCE(ib.run_id, ib.batch_id) AS run_id,
+                      COALESCE(ib.created_at, '') AS created_at,
+                      COALESCE(ib.mode, '') AS mode,
+                      COALESCE(ib.input_dir, '') AS input_dir,
+                      COALESCE(ib.file_glob, '') AS file_glob,
+                      COUNT(wc.row_hash) AS cleaned_rows
+                    FROM import_batch ib
+                    LEFT JOIN warehouse_cleaned wc ON wc.batch_id = ib.batch_id
+                    WHERE COALESCE(ib.tool_id, ?) = ?
+                    GROUP BY ib.batch_id, ib.tool_id, ib.run_id, ib.created_at, ib.mode, ib.input_dir, ib.file_glob
+                    ORDER BY COALESCE(ib.created_at, '') DESC, ib.batch_id DESC
+                    LIMIT ?
+                    """,
+                    (sid, sid, sid, lim),
+                )
+                rows = cur.fetchall() or []
+                out: List[Dict[str, Any]] = []
+                for r in rows:
+                    rid = str(r[2] or r[0] or "").strip()
+                    if not rid:
+                        continue
+                    out.append(
                         {
-                            "tool_id": tid,
-                            "run_id": str(r[0] or "").strip(),
-                            "started_at": str(r[0] or "").strip(),
-                            "finished_at": str(r[0] or "").strip(),
+                            "tool_id": str(r[1] or sid),
+                            "run_id": rid,
+                            "batch_id": str(r[0] or rid),
+                            "started_at": str(r[3] or ""),
+                            "finished_at": str(r[3] or ""),
                             "status": "ok",
-                            "cleaned_rows": 0,
+                            "cleaned_path": "",
+                            "cleaned_sqlite_path": sp,
+                            "cleaned_rows": int(r[7] or 0),
                             "processed_files": 0,
+                            "warnings": [],
                             "errors": [],
-                            "meta": {},
+                            "artifacts": [{"name": "累计库(SQLite)", "path": sp, "kind": "sqlite"}],
+                            "input": {"input_dir": str(r[5] or ""), "file_glob": str(r[6] or "")},
+                            "output": {"cleaned_rows": int(r[7] or 0), "cleaned_sqlite_path": sp},
+                            "meta": {"mode": str(r[4] or ""), "source": "warehouse.import_batch"},
                         }
-                        for r in rows
-                        if r and str(r[0] or "").strip()
-                    ]
-                    return sanitize_json({"ok": True, "tool_id": tid, "runs": runs})
+                    )
+                return out
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception:
+            return []
+
+    def _list_source_runs(source_tool_id: str = "report_ingestor", limit: int = 50) -> List[Dict[str, Any]]:
+        sid = str(source_tool_id or "report_ingestor").strip() or "report_ingestor"
+        lim = int(max(1, min(int(limit or 50), 500)))
+        merged: List[Dict[str, Any]] = []
+        seen = set()
+        try:
+            from fa_platform.run_index import list_runs
+            for item in list_runs(sid, limit=lim):
+                rid = str((item or {}).get("run_id") or "").strip()
+                if not rid or rid in seen:
+                    continue
+                row = dict(item or {})
+                row["batch_id"] = rid
+                row["source"] = "run_index"
+                if not row.get("cleaned_sqlite_path"):
+                    sp = os.path.abspath(os.path.join(_default_data_root(), "warehouse.sqlite"))
+                    if os.path.exists(sp):
+                        row["cleaned_sqlite_path"] = sp
+                merged.append(row)
+                seen.add(rid)
         except Exception:
             pass
-        return sanitize_json({"ok": True, "tool_id": tid, "runs": []})
+        for item in _list_warehouse_source_batches(sid, lim):
+            rid = str((item or {}).get("run_id") or "").strip()
+            if not rid or rid in seen:
+                continue
+            merged.append(item)
+            seen.add(rid)
+
+        def _run_sort_key(row: Dict[str, Any]) -> str:
+            return str(row.get("finished_at") or row.get("started_at") or row.get("run_id") or "")
+
+        merged.sort(key=_run_sort_key, reverse=True)
+        return merged[:lim]
+
+    def _latest_source_run_id(source_tool_id: str = "report_ingestor") -> str:
+        runs = _list_source_runs(source_tool_id=source_tool_id, limit=1)
+        if not runs:
+            return ""
+        return str((runs[0] or {}).get("run_id") or "").strip()
+
+    @app.get("/api/source-runs")
+    def api_source_runs(source_tool_id: str = "report_ingestor", limit: int = 50) -> Dict[str, Any]:
+        sid = str(source_tool_id or "report_ingestor").strip() or "report_ingestor"
+        lim = int(max(1, min(int(limit or 50), 500)))
+        try:
+            runs = _list_source_runs(source_tool_id=sid, limit=lim)
+            return sanitize_json({"ok": True, "source_tool_id": sid, "runs": runs})
+        except Exception as e:
+            return sanitize_json({"ok": False, "message": str(e), "source_tool_id": sid, "runs": []})
+
+    @app.get("/api/artifacts/download")
+    def api_artifacts_download(path: str):
+        path, err = _resolve_safe_artifact_path(path, must_be_file=True)
+        if err:
+            status = 404 if err == "文件不存在" else 403
+            return Response(content=err, media_type="text/plain; charset=utf-8", status_code=status)
+        filename = os.path.basename(path)
+        media_type = _artifact_media_type(path)
+        headers = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"}
+        return FileResponse(path, media_type=media_type, filename=filename, headers=headers)
+
+    @app.post("/api/artifacts/open")
+    def api_artifacts_open(payload: Dict[str, Any]) -> Dict[str, Any]:
+        raw_path = str((payload or {}).get("path", "")).strip()
+        path, err = _resolve_safe_artifact_path(raw_path, must_be_file=False)
+        if err:
+            return {"ok": False, "message": err}
+        try:
+            os.startfile(path)
+            return {"ok": True, "message": "已在服务端本机打开", "path": path}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
 
     @app.get("/api/run/active")
     def api_run_active(tool_id: str = "") -> Dict[str, Any]:
@@ -714,6 +816,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     def api_validation_query(
         tool_id: str = "",
         run_id: str = "",
+        source_tool_id: str = "report_ingestor",
         min_diff: Optional[float] = None,
         max_diff: Optional[float] = None,
         source_file: str = "",
@@ -723,11 +826,13 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     ) -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
         bid = str(run_id or "").strip()
+        if not bid:
+            bid = _latest_source_run_id(source_tool_id)
         sp = _warehouse_path()
         if not sp or not os.path.exists(sp):
             return {"status": "error", "message": "累计库不存在，请先运行清洗落库"}
         if not bid:
-            return {"status": "ok", "data": [], "total": 0}
+            return {"status": "ok", "data": [], "total": 0, "tool_id": tid, "run_id": bid, "batch_id": bid}
 
         lim = int(max(1, min(int(limit or 200), 5000)))
         off = int(max(0, int(offset or 0)))
@@ -737,7 +842,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             try:
                 cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='warehouse_validation'")
                 if not cur.fetchone():
-                    return {"status": "ok", "data": [], "total": 0}
+                    return {"status": "ok", "data": [], "total": 0, "tool_id": tid, "run_id": bid, "batch_id": bid}
 
                 try:
                     cur = conn.execute("SELECT MAX(run_id) FROM warehouse_validation WHERE source_run_id = ?", (bid,))
@@ -746,7 +851,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                 except Exception:
                     v_run_id = ""
                 if not v_run_id:
-                    return {"status": "ok", "data": [], "total": 0}
+                    return {"status": "ok", "data": [], "total": 0, "tool_id": tid, "run_id": bid, "batch_id": bid}
 
                 where: List[str] = ["source_run_id = ?", "run_id = ?"]
                 params: List[Any] = [bid, v_run_id]
@@ -801,21 +906,23 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
 
     @app.get("/api/validation/summary")
-    def api_validation_summary(tool_id: str = "", run_id: str = "") -> Dict[str, Any]:
+    def api_validation_summary(tool_id: str = "", run_id: str = "", source_tool_id: str = "report_ingestor") -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
         bid = str(run_id or "").strip()
+        if not bid:
+            bid = _latest_source_run_id(source_tool_id)
         sp = _warehouse_path()
         if not sp or not os.path.exists(sp):
             return {"status": "error", "message": "累计库不存在，请先运行清洗落库"}
         if not bid:
-            return {"status": "ok", "data": []}
+            return {"status": "ok", "data": [], "tool_id": tid, "run_id": bid, "batch_id": bid}
 
         try:
             conn = sqlite3.connect(sp, check_same_thread=False)
             try:
                 cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='warehouse_validation'")
                 if not cur.fetchone():
-                    return {"status": "ok", "data": []}
+                    return {"status": "ok", "data": [], "tool_id": tid, "run_id": bid, "batch_id": bid}
 
                 try:
                     cur = conn.execute("SELECT MAX(run_id) FROM warehouse_validation WHERE source_run_id = ?", (bid,))
@@ -824,7 +931,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                 except Exception:
                     v_run_id = ""
                 if not v_run_id:
-                    return {"status": "ok", "data": []}
+                    return {"status": "ok", "data": [], "tool_id": tid, "run_id": bid, "batch_id": bid}
 
                 sql = """
                     SELECT
@@ -852,9 +959,11 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
 
     @app.get("/api/metrics/summary")
-    def api_metrics_summary(tool_id: str = "", run_id: str = "") -> Dict[str, Any]:
+    def api_metrics_summary(tool_id: str = "", run_id: str = "", source_tool_id: str = "report_ingestor") -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
         bid = str(run_id or "").strip()
+        if not bid:
+            bid = _latest_source_run_id(source_tool_id)
         sp = _warehouse_path()
         if not sp or not os.path.exists(sp):
             return {"ok": False, "message": "累计库不存在，请先运行清洗落库", "tool_id": tid, "run_id": bid, "path": sp}
@@ -924,6 +1033,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     def api_metrics_query(
         tool_id: str = "",
         run_id: str = "",
+        source_tool_id: str = "report_ingestor",
         source_file: str = "",
         period: str = "",
         sort_by: str = "",
@@ -933,6 +1043,8 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
     ) -> Dict[str, Any]:
         tid = runner._normalize_tool_id(tool_id)
         bid = str(run_id or "").strip()
+        if not bid:
+            bid = _latest_source_run_id(source_tool_id)
         sp = _warehouse_path()
         lim = int(max(1, min(int(limit or 200), 5000)))
         off = int(max(0, int(offset or 0)))
@@ -1057,6 +1169,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         subject: str = "",
         source_file: str = "",
         period: str = "",
+        entity: str = "",
         report_type: str = "",
         category: str = "",
         time_attr: str = "",
@@ -1076,6 +1189,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             q=q,
             subject=subject,
             source_file=source_file,
+            entity=entity,
             report_type=report_type,
             category=category,
             time_attr=time_attr,
@@ -1102,6 +1216,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         subject: str = "",
         source_file: str = "",
         period: str = "",
+        entity: str = "",
         report_type: str = "",
         category: str = "",
         time_attr: str = "",
@@ -1119,6 +1234,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
             q=q,
             subject=subject,
             source_file=source_file,
+            entity=entity,
             report_type=report_type,
             category=category,
             time_attr=time_attr,
@@ -1173,7 +1289,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                 except Exception:
                     out["rows"] = 0
 
-                for col in ["源文件", "报表类型", "大类", "时间属性", "期间", "年份", "报表口径"]:
+                for col in ["源文件", "主体", "报表类型", "大类", "时间属性", "期间", "年份", "报表口径"]:
                     if cols and col not in cols:
                         continue
                     try:
@@ -1280,6 +1396,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         q: str = "",
         subject: str = "",
         source_file: str = "",
+        entity: str = "",
         report_type: str = "",
         category: str = "",
         time_attr: str = "",
@@ -1309,7 +1426,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                     cols = []
                 cols = [c for c in cols if c not in {"日期", "金额文本", "值状态"}]
                 allowed_cols = set(cols) if cols else {
-                    "源文件", "来源Sheet", "期间", "年份", "报表口径", "报表类型", "大类", "科目", "科目规范", "时间属性", "金额"
+                    "源文件", "来源Sheet", "期间", "年份", "主体", "报表口径", "报表类型", "大类", "科目", "科目规范", "时间属性", "金额"
                 }
 
                 where: List[str] = []
@@ -1328,6 +1445,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
                 add_eq("batch_id", batch_id)
                 add_eq("源文件", source_file)
+                add_eq("主体", entity)
                 add_eq("报表类型", report_type)
                 add_eq("大类", category)
                 add_eq("时间属性", time_attr)
@@ -1447,6 +1565,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
         q: str = "",
         subject: str = "",
         source_file: str = "",
+        entity: str = "",
         report_type: str = "",
         category: str = "",
         time_attr: str = "",
@@ -1481,7 +1600,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
                     cols = []
                 cols = [c for c in cols if c not in {"日期", "金额文本", "值状态"}]
                 allowed_cols = set(cols) if cols else {
-                    "源文件", "来源Sheet", "期间", "年份", "报表口径", "报表类型", "大类", "科目", "科目规范", "时间属性", "金额"
+                    "源文件", "来源Sheet", "期间", "年份", "主体", "报表口径", "报表类型", "大类", "科目", "科目规范", "时间属性", "金额"
                 }
 
                 where: List[str] = []
@@ -1500,6 +1619,7 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
                 add_eq("batch_id", batch_id)
                 add_eq("源文件", source_file)
+                add_eq("主体", entity)
                 add_eq("报表类型", report_type)
                 add_eq("大类", category)
                 add_eq("时间属性", time_attr)
@@ -1602,12 +1722,13 @@ def run_web(config_path: str, host: str = "127.0.0.1", port: int = 8765, open_br
 
     @app.post("/api/open")
     def api_open(payload: Dict[str, Any]) -> Dict[str, Any]:
-        path = str((payload or {}).get("path", "")).strip()
-        if not path or not os.path.exists(path):
-            return {"ok": False, "message": "路径不存在"}
+        raw_path = str((payload or {}).get("path", "")).strip()
+        path, err = _resolve_safe_artifact_path(raw_path, must_be_file=False)
+        if err:
+            return {"ok": False, "message": err}
         try:
             os.startfile(path)
-            return {"ok": True}
+            return {"ok": True, "message": "已在服务端本机打开", "path": path}
         except Exception as e:
             return {"ok": False, "message": str(e)}
 

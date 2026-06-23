@@ -475,6 +475,7 @@ def _ensure_warehouse_schema(conn: sqlite3.Connection) -> None:
           来源Sheet TEXT,
           期间 TEXT,
           年份 TEXT,
+          主体 TEXT,
           报表口径 TEXT,
           报表类型 TEXT,
           大类 TEXT,
@@ -486,9 +487,17 @@ def _ensure_warehouse_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    try:
+        cur = conn.execute("PRAGMA table_info(warehouse_cleaned)")
+        cols = {str(r[1]) for r in (cur.fetchall() or []) if r and len(r) > 1}
+        if "主体" not in cols:
+            conn.execute("ALTER TABLE warehouse_cleaned ADD COLUMN 主体 TEXT")
+    except Exception:
+        pass
     conn.execute("CREATE INDEX IF NOT EXISTS ix_warehouse_period_stmt ON warehouse_cleaned(期间, 报表类型, 时间属性)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_warehouse_period ON warehouse_cleaned(期间)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_warehouse_subject ON warehouse_cleaned(科目规范)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_warehouse_entity ON warehouse_cleaned(主体)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_warehouse_year ON warehouse_cleaned(年份)")
 
 
@@ -653,6 +662,7 @@ def _write_to_warehouse(df: pd.DataFrame, batch_id: str, cfg: AppConfig, mode: s
                     rec.get("源文件"),
                     rec.get("来源Sheet"),
                     period,
+                    rec.get("主体"),
                     rec.get("报表口径"),
                     rec.get("报表类型"),
                     rec.get("大类"),
@@ -669,6 +679,7 @@ def _write_to_warehouse(df: pd.DataFrame, batch_id: str, cfg: AppConfig, mode: s
                     rec.get("来源Sheet"),
                     period,
                     year,
+                    rec.get("主体"),
                     rec.get("报表口径"),
                     rec.get("报表类型"),
                     rec.get("大类"),
@@ -681,8 +692,8 @@ def _write_to_warehouse(df: pd.DataFrame, batch_id: str, cfg: AppConfig, mode: s
         conn.executemany(
             """
             INSERT OR IGNORE INTO warehouse_cleaned(
-              batch_id, row_hash, 源文件, 来源Sheet, 期间, 年份, 报表口径, 报表类型, 大类, 科目, 科目规范, 时间属性, 金额
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              batch_id, row_hash, 源文件, 来源Sheet, 期间, 年份, 主体, 报表口径, 报表类型, 大类, 科目, 科目规范, 时间属性, 金额
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -849,7 +860,9 @@ def run_analysis(
     result.found_files = files
 
     if not files:
-        logger.warning("未找到任何匹配的 .xlsx 文件")
+        msg = "未找到任何匹配的 .xlsx 文件"
+        logger.warning(msg)
+        result.warnings.append(msg)
         return result
 
     logger.info(f"找到 {len(files)} 个Excel文件")
@@ -858,7 +871,9 @@ def run_analysis(
     for idx, file_path in enumerate(files, start=1):
         if cancel_event and cancel_event.is_set():
             result.cancelled = True
-            logger.warning("已取消运行")
+            msg = "已取消运行"
+            logger.warning(msg)
+            result.warnings.append(msg)
             return result
         if progress_cb:
             progress_cb("file", idx, len(files), os.path.basename(file_path))
@@ -898,9 +913,13 @@ def run_analysis(
 
                 if not recognized_sheets and logger:
                     preview = ", ".join([str(x) for x in (all_sheets or [])[:8]])
-                    logger.warning(f"{base_name} 未识别到三大报表Sheet；前几个Sheet: {preview}")
+                    msg = f"{base_name} 未识别到三大报表Sheet；前几个Sheet: {preview}"
+                    logger.warning(msg)
+                    result.warnings.append(msg)
                 elif empty_sheets and logger:
-                    logger.warning(f"{base_name} 以下报表Sheet未提取到有效行: {', '.join(empty_sheets)}")
+                    msg = f"{base_name} 以下报表Sheet未提取到有效行: {', '.join(empty_sheets)}"
+                    logger.warning(msg)
+                    result.warnings.append(msg)
 
                 if file_sheets_data:
                     file_data = pd.concat(file_sheets_data, ignore_index=True)
@@ -914,7 +933,9 @@ def run_analysis(
                     all_files_data.append(file_data)
                     result.processed_files += 1
                 elif recognized_sheets and logger:
-                    logger.warning(f"{base_name} 已识别报表Sheet但未生成清洗数据")
+                    msg = f"{base_name} 已识别报表Sheet但未生成清洗数据"
+                    logger.warning(msg)
+                    result.warnings.append(msg)
             finally:
                 excel_file.close()
         except Exception as e:

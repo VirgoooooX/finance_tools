@@ -124,6 +124,7 @@
              <div><label class="form-label">金额范围 (最小)</label><input id="qMinAmount" class="form-control" placeholder="0"></div>
              <div><label class="form-label">金额范围 (最大)</label><input id="qMaxAmount" class="form-control" placeholder="1000000"></div>
              <div><label class="form-label">源文件</label><select id="qSourceFile" class="form-select"></select></div>
+             <div><label class="form-label">主体</label><select id="qEntity" class="form-select"></select></div>
              <div><label class="form-label">期间</label><select id="qPeriod" class="form-select"></select></div>
              <div><label class="form-label">报表类型</label><select id="qReportType" class="form-select"></select></div>
              <div><label class="form-label">时间属性</label><select id="qTimeAttr" class="form-select"></select></div>
@@ -131,7 +132,7 @@
                <label class="form-label">排序字段</label>
                <select id="qSortBy" class="form-select">
                  <option value="金额">金额</option><option value="期间">期间</option><option value="报表类型">报表类型</option>
-                 <option value="大类">大类</option><option value="科目">科目</option><option value="源文件">源文件</option>
+                 <option value="主体">主体</option><option value="大类">大类</option><option value="科目">科目</option><option value="源文件">源文件</option>
                  <option value="来源Sheet">来源Sheet</option><option value="时间属性">时间属性</option>
                </select>
              </div>
@@ -147,7 +148,7 @@
                <label class="form-label">分组维度 (汇总)</label>
                <select id="qGroupBy" class="form-select">
                  <option value="">不分组</option><option value="源文件">源文件</option><option value="期间">期间</option>
-                 <option value="报表类型">报表类型</option><option value="大类">大类</option><option value="科目">科目</option>
+                 <option value="主体">主体</option><option value="报表类型">报表类型</option><option value="大类">大类</option><option value="科目">科目</option>
                  <option value="时间属性">时间属性</option><option value="来源Sheet">来源Sheet</option>
                </select>
              </div>
@@ -189,6 +190,8 @@
               </div>
             </div>
           </div>
+          <div id="runWarnings" class="text-mono" style="margin-top: .75rem; color: var(--warning); font-size: .85rem;"></div>
+          <div id="runArtifacts" style="margin-top: .75rem;"></div>
         </div>
       </div>
 
@@ -426,6 +429,7 @@
           if (el) el.innerText = lp || '-';
         } catch {}
         setSelectOptions(document.getElementById('qSourceFile'), data['源文件'] || []);
+        setSelectOptions(document.getElementById('qEntity'), data['主体'] || []);
         setSelectOptions(document.getElementById('qPeriod'), data['期间'] || []);
         setSelectOptions(document.getElementById('qReportType'), data['报表类型'] || []);
         setSelectOptions(document.getElementById('qTimeAttr'), data['时间属性'] || []);
@@ -437,6 +441,7 @@
       return {
         subject: document.getElementById('qSubject').value.trim(),
         source_file: document.getElementById('qSourceFile').value,
+        entity: document.getElementById('qEntity').value,
         period: document.getElementById('qPeriod').value,
         report_type: document.getElementById('qReportType').value,
         time_attr: document.getElementById('qTimeAttr').value,
@@ -457,7 +462,7 @@
         const hitTxt = `命中 ${data.total} 行 | ${data.offset+1}-${Math.min(data.offset+data.limit, data.total)}`;
         document.getElementById('qMeta').innerText = (warehouseSummaryText) ? `${warehouseSummaryText} | ${hitTxt}` : hitTxt;
         renderTable(document.getElementById('cleanedHead'), document.getElementById('cleanedBody'), data.rows || [], 
-          ['源文件', '期间', '报表类型', '大类', '科目', '时间属性', '金额', '条数', '来源Sheet']);
+          ['源文件', '主体', '期间', '报表类型', '大类', '科目', '时间属性', '金额', '条数', '来源Sheet']);
       } catch { setStatus('查询失败'); }
     }
     function exportCSV() {
@@ -517,7 +522,50 @@
     }
     async function openPath(kind) {
       const path = latestPaths[kind];
-      if (path) await apiCall('/api/open', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path}) });
+      if (path) await apiCall('/api/artifacts/open', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path}) });
+    }
+    function renderRunMessages(res) {
+      const warnEl = document.getElementById('runWarnings');
+      const warnings = Array.isArray(res?.warnings) ? res.warnings.filter(Boolean) : [];
+      warnEl.innerHTML = '';
+      if (warnings.length) {
+        warnEl.innerText = '告警：\n' + warnings.map(x => `- ${x}`).join('\n');
+      }
+      const artEl = document.getElementById('runArtifacts');
+      const artifacts = Array.isArray(res?.artifacts) ? res.artifacts : [];
+      artEl.innerHTML = '';
+      if (!artifacts.length) return;
+      for (const a of artifacts) {
+        const path = String(a?.path || '').trim();
+        if (!path) continue;
+        const row = document.createElement('div');
+        row.className = 'd-flex gap-2 align-items-center';
+        row.style.marginTop = '.35rem';
+        const label = document.createElement('div');
+        label.className = 'text-mono flex-1';
+        label.style.cssText = 'color: var(--text-secondary); overflow:hidden; text-overflow:ellipsis;';
+        label.innerText = `${a?.name || a?.kind || '产物'}：${path}`;
+        const btnOpen = document.createElement('button');
+        btnOpen.className = 'btn btn-secondary btn-sm';
+        btnOpen.innerText = '打开';
+        btnOpen.addEventListener('click', () => openArtifact(path));
+        const btnDown = document.createElement('button');
+        btnDown.className = 'btn btn-secondary btn-sm';
+        btnDown.innerText = '下载';
+        btnDown.addEventListener('click', () => downloadArtifact(path));
+        row.appendChild(label);
+        row.appendChild(btnOpen);
+        row.appendChild(btnDown);
+        artEl.appendChild(row);
+      }
+    }
+    async function openArtifact(path) {
+      if (!path) return;
+      try { await apiCall('/api/artifacts/open', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path}) }); } catch {}
+    }
+    function downloadArtifact(path) {
+      if (!path) return;
+      window.open('/api/artifacts/download?path=' + encodeURIComponent(path), '_blank');
     }
 
     // --- Rules Logic ---
@@ -627,6 +675,7 @@
          await loadQueryOptions(false);
          document.getElementById('qSubject').value = q.subject||'';
          document.getElementById('qSourceFile').value = q.source_file||'';
+         document.getElementById('qEntity').value = q.entity||'';
          document.getElementById('qPeriod').value = q.period||q.date||'';
          document.getElementById('qReportType').value = q.report_type||'';
          document.getElementById('qTimeAttr').value = q.time_attr||'';
@@ -664,6 +713,7 @@
            const res = data.result || {};
            latestPaths = { cleaned: res.cleaned_path||'' };
            document.getElementById('outCleaned').innerText = latestPaths.cleaned;
+           renderRunMessages(res);
         }
       }
     });

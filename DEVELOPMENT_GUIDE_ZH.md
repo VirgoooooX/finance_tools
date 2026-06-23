@@ -54,8 +54,15 @@ root/
 记录内容包括：
 - tool_id / run_id
 - cleaned_path / cleaned_sqlite_path
-- cleaned_rows / processed_files / errors
-- meta：输入/输出/匹配模式 + tool_params 快照（用于审计与复现）
+- cleaned_rows / processed_files / errors / warnings
+- artifacts：本次运行产生的 Excel、SQLite、CSV 等产物
+- input / output：输入配置快照与关键输出指标
+- meta：兼容性元数据与 tool_params 快照（用于审计与复现）
+
+API 约定：
+- `/api/runs?tool_id=<tool_id>` 只返回该工具自己的运行历史
+- `/api/source-runs?source_tool_id=report_ingestor` 返回可供下游工具选择的清洗源批次
+- 下游工具如果依赖清洗库，应保存 `source_tool_id/source_run_id`，不要把自己的 `run_id` 当作清洗批次
 
 ## 4. 清洗管线框架平台化（fa_platform.pipeline）
 
@@ -68,6 +75,8 @@ root/
 约定：
 - 输出目录：`output/<tool_id>/<YYYYMMDD_HHMMSS>/`
 - 数据目录：`data/`（SQLite + run_index.sqlite）
+- 清洗累计库固定为 `data/warehouse.sqlite`
+- 产物下载/打开必须走 `/api/artifacts/download` 和 `/api/artifacts/open`，只能访问 `data/` 与各工具配置的 `output_dir`
 
 ## 5. 开发新工具（推荐模板）
 
@@ -104,6 +113,7 @@ root/
 - `AnalysisResult.cleaned_sqlite_path`
 - （可选）`validation_path / metrics_path`
 - `AnalysisResult.artifacts`（用于 Web 展示“可打开/可下载”的产物列表）
+- `AnalysisResult.warnings`（非致命问题，例如未识别 Sheet、空 Sheet、字段缺失兜底等）
 - `AnalysisResult.run_id`（建议与时间戳一致）
 
 ## 6. Web Shell 与 iframe 工具页约定
@@ -133,9 +143,11 @@ py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config
 
 ## 8. 输出与存储规范
 
-- 输出目录：`output/<tool_id>/<YYYYMMDD_HHMMSS>/`
+- 输出目录：`output/<tool_id>/...`，具体子目录由工具决定，但必须写入 `AnalysisResult.artifacts`
 - 数据目录：`data/`
-  - 清洗 SQLite：建议包含 `cleaned` 表，并对常用过滤列建索引
+  - 累计库：`warehouse.sqlite`
+  - 清洗表：`warehouse_cleaned`，标准字段包含 `源文件/来源Sheet/期间/年份/主体/报表口径/报表类型/大类/科目/科目规范/时间属性/金额`
+  - 下游表：使用 `source_tool_id/source_run_id` 指向清洗源批次
   - Run Index：`data/run_index.sqlite` 记录每次运行的路径与参数快照
 
 ## 9. 打包与发布
@@ -143,4 +155,5 @@ py -c "import financial_analyzer_core as c; raise SystemExit(c.main())" --config
 - 打包脚本：build_exe.py（PyInstaller）
 - 资源文件：web/ 与 tools/ 下的 web 资源需被包含
 - 动态依赖：必要时加入 hiddenimports 或确保可被静态导入链覆盖
-- 入口文件：当前 build_exe.py 仍引用 `financial_analyzer.py`，如缺失需先调整打包入口
+- 默认入口文件：`financial_analyzer_web.py`
+- 本机运行默认监听 `127.0.0.1`；如需局域网访问，可在启动时使用 `host='0.0.0.0'`，第一阶段不包含权限系统，只建议可信内网临时开放

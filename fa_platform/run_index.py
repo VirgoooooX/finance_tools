@@ -36,11 +36,45 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             processed_files INTEGER,
             found_files_json TEXT,
             errors_json TEXT,
+            warnings_json TEXT,
+            artifacts_json TEXT,
+            input_json TEXT,
+            output_json TEXT,
             meta_json TEXT,
             PRIMARY KEY (tool_id, run_id)
         )
         """
     )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(runs)")
+        columns = [col[1] for col in cur.fetchall()]
+
+        new_cols = {
+            "started_at": "TEXT",
+            "finished_at": "TEXT",
+            "status": "TEXT",
+            "cleaned_path": "TEXT",
+            "cleaned_sqlite_path": "TEXT",
+            "cleaned_rows": "INTEGER",
+            "processed_files": "INTEGER",
+            "found_files_json": "TEXT",
+            "errors_json": "TEXT",
+            "warnings_json": "TEXT",
+            "artifacts_json": "TEXT",
+            "input_json": "TEXT",
+            "output_json": "TEXT",
+            "meta_json": "TEXT",
+        }
+        for col, col_type in new_cols.items():
+            if col not in columns:
+                try:
+                    conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_tool_started ON runs(tool_id, started_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_tool_finished ON runs(tool_id, finished_at DESC)")
     conn.commit()
@@ -92,6 +126,8 @@ def upsert_run_from_result(tool_id: str, cfg: Any, res: Any) -> Tuple[str, str]:
 
     cancelled = bool(getattr(res, "cancelled", False))
     errors = list(getattr(res, "errors", []) or [])
+    warnings = list(getattr(res, "warnings", []) or [])
+    artifacts = list(getattr(res, "artifacts", []) or [])
     status = "cancelled" if cancelled else ("error" if errors else "ok")
 
     cleaned_rows = int(getattr(res, "cleaned_rows", 0) or 0)
@@ -107,11 +143,37 @@ def upsert_run_from_result(tool_id: str, cfg: Any, res: Any) -> Tuple[str, str]:
     except Exception:
         pass
     
+    tp = getattr(cfg, "tool_params", None)
     try:
-        tp = getattr(cfg, "tool_params", None)
         if isinstance(tp, dict):
             bucket = tp.get(tid)
             meta["tool_params"] = sanitize_json(bucket if isinstance(bucket, dict) else {})
+    except Exception:
+        pass
+
+    input_data = {}
+    try:
+        input_data["input_dir"] = str(getattr(cfg, "input_dir", "") or "").strip()
+        input_data["file_glob"] = str(getattr(cfg, "file_glob", "") or "").strip()
+        input_data["output_dir"] = str(getattr(cfg, "output_dir", "") or "").strip()
+        input_data["output_basename"] = str(getattr(cfg, "output_basename", "") or "").strip()
+        if isinstance(tp, dict):
+            bucket = tp.get(tid)
+            input_data["tool_params"] = sanitize_json(bucket if isinstance(bucket, dict) else {})
+    except Exception:
+        pass
+
+    output_data = {}
+    try:
+        output_data["cleaned_rows"] = cleaned_rows
+        output_data["processed_files"] = processed_files
+        output_data["metrics_groups"] = int(getattr(res, "metrics_groups", 0) or 0)
+        output_data["validation_groups"] = int(getattr(res, "validation_groups", 0) or 0)
+        output_data["unbalanced_count"] = int(getattr(res, "unbalanced_count", 0) or 0)
+        output_data["cleaned_path"] = cleaned_path
+        output_data["cleaned_sqlite_path"] = cleaned_sqlite_path
+        output_data["validation_path"] = str(getattr(res, "validation_path", "") or "").strip()
+        output_data["metrics_path"] = str(getattr(res, "metrics_path", "") or "").strip()
     except Exception:
         pass
 
@@ -124,9 +186,10 @@ def upsert_run_from_result(tool_id: str, cfg: Any, res: Any) -> Tuple[str, str]:
                     tool_id, run_id, started_at, finished_at, status,
                     cleaned_path, cleaned_sqlite_path,
                     cleaned_rows, processed_files,
-                    found_files_json, errors_json, meta_json
+                    found_files_json, errors_json, warnings_json, artifacts_json,
+                    input_json, output_json, meta_json
                 )
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(tool_id, run_id) DO UPDATE SET
                     started_at=excluded.started_at,
                     finished_at=excluded.finished_at,
@@ -137,6 +200,10 @@ def upsert_run_from_result(tool_id: str, cfg: Any, res: Any) -> Tuple[str, str]:
                     processed_files=excluded.processed_files,
                     found_files_json=excluded.found_files_json,
                     errors_json=excluded.errors_json,
+                    warnings_json=excluded.warnings_json,
+                    artifacts_json=excluded.artifacts_json,
+                    input_json=excluded.input_json,
+                    output_json=excluded.output_json,
                     meta_json=excluded.meta_json
                 """,
                 (
@@ -151,6 +218,10 @@ def upsert_run_from_result(tool_id: str, cfg: Any, res: Any) -> Tuple[str, str]:
                     processed_files,
                     _json.dumps(found_files, ensure_ascii=False),
                     _json.dumps(errors, ensure_ascii=False),
+                    _json.dumps(warnings, ensure_ascii=False),
+                    _json.dumps(artifacts, ensure_ascii=False),
+                    _json.dumps(input_data, ensure_ascii=False),
+                    _json.dumps(output_data, ensure_ascii=False),
                     _json.dumps(meta, ensure_ascii=False),
                 ),
             )
@@ -172,7 +243,8 @@ def list_runs(tool_id: str, limit: int = 50) -> List[Dict[str, Any]]:
                 SELECT tool_id, run_id, started_at, finished_at, status,
                        cleaned_path, cleaned_sqlite_path,
                        cleaned_rows, processed_files,
-                       errors_json, meta_json
+                       errors_json, warnings_json, artifacts_json,
+                       input_json, output_json, meta_json
                 FROM runs
                 WHERE tool_id = ?
                 ORDER BY COALESCE(finished_at, started_at) DESC, run_id DESC
@@ -191,7 +263,23 @@ def list_runs(tool_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         except Exception:
             errors = []
         try:
-            meta = _json.loads(r[10] or "{}")
+            warnings = _json.loads(r[10] or "[]")
+        except Exception:
+            warnings = []
+        try:
+            artifacts = _json.loads(r[11] or "[]")
+        except Exception:
+            artifacts = []
+        try:
+            input_val = _json.loads(r[12] or "{}")
+        except Exception:
+            input_val = {}
+        try:
+            output_val = _json.loads(r[13] or "{}")
+        except Exception:
+            output_val = {}
+        try:
+            meta = _json.loads(r[14] or "{}")
         except Exception:
             meta = {}
         out.append(
@@ -206,6 +294,10 @@ def list_runs(tool_id: str, limit: int = 50) -> List[Dict[str, Any]]:
                 "cleaned_rows": r[7],
                 "processed_files": r[8],
                 "errors": errors,
+                "warnings": warnings,
+                "artifacts": artifacts,
+                "input": input_val,
+                "output": output_val,
                 "meta": meta,
             }
         )
@@ -225,7 +317,8 @@ def get_run(tool_id: str, run_id: str) -> Optional[Dict[str, Any]]:
                 SELECT tool_id, run_id, started_at, finished_at, status,
                        cleaned_path, cleaned_sqlite_path,
                        cleaned_rows, processed_files,
-                       found_files_json, errors_json, meta_json
+                       found_files_json, errors_json, warnings_json, artifacts_json,
+                       input_json, output_json, meta_json
                 FROM runs
                 WHERE tool_id = ? AND run_id = ?
                 LIMIT 1
@@ -247,7 +340,23 @@ def get_run(tool_id: str, run_id: str) -> Optional[Dict[str, Any]]:
     except Exception:
         errors = []
     try:
-        meta = _json.loads(row[11] or "{}")
+        warnings = _json.loads(row[11] or "[]")
+    except Exception:
+        warnings = []
+    try:
+        artifacts = _json.loads(row[12] or "[]")
+    except Exception:
+        artifacts = []
+    try:
+        input_val = _json.loads(row[13] or "{}")
+    except Exception:
+        input_val = {}
+    try:
+        output_val = _json.loads(row[14] or "{}")
+    except Exception:
+        output_val = {}
+    try:
+        meta = _json.loads(row[15] or "{}")
     except Exception:
         meta = {}
     return {
@@ -262,6 +371,10 @@ def get_run(tool_id: str, run_id: str) -> Optional[Dict[str, Any]]:
         "processed_files": row[8],
         "found_files": found_files,
         "errors": errors,
+        "warnings": warnings,
+        "artifacts": artifacts,
+        "input": input_val,
+        "output": output_val,
         "meta": meta,
     }
 

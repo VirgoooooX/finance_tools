@@ -43,6 +43,7 @@ class AnalysisResult:
     run_finished_at: Optional[str] = None
     cancelled: bool = False
     errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
     found_files: List[str] = field(default_factory=list)
     processed_files: int = 0
     cleaned_rows: int = 0

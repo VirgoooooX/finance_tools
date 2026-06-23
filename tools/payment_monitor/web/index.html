@@ -296,6 +296,8 @@
               <div id="outDb" class="text-mono form-control" style="background: var(--bg-subtle); border: none;"></div>
             </div>
           </div>
+          <div id="runWarnings" class="text-mono" style="margin-top: .75rem; color: var(--warning); font-size: .85rem;"></div>
+          <div id="runArtifacts" style="margin-top: .75rem;"></div>
         </div>
       </div>
       
@@ -792,19 +794,62 @@
             const errorList = document.getElementById('errorList');
             errorList.innerHTML = res.errors.map(e => `<div>${e}</div>`).join('');
           }
+          renderRunMessages(res);
           
           showView('results');
         }
       }
     });
+
+    function renderRunMessages(res) {
+      const warnEl = document.getElementById('runWarnings');
+      const warnings = Array.isArray(res?.warnings) ? res.warnings.filter(Boolean) : [];
+      warnEl.innerHTML = '';
+      if (warnings.length) {
+        warnEl.innerText = '告警：\n' + warnings.map(x => `- ${x}`).join('\n');
+      }
+      const artEl = document.getElementById('runArtifacts');
+      const artifacts = Array.isArray(res?.artifacts) ? res.artifacts : [];
+      artEl.innerHTML = '';
+      if (!artifacts.length) return;
+      for (const a of artifacts) {
+        const path = String(a?.path || '').trim();
+        if (!path) continue;
+        const row = document.createElement('div');
+        row.className = 'd-flex gap-2 align-items-center';
+        row.style.marginTop = '.35rem';
+        const label = document.createElement('div');
+        label.className = 'text-mono flex-1';
+        label.style.cssText = 'color: var(--text-secondary); overflow:hidden; text-overflow:ellipsis;';
+        label.innerText = `${a?.name || a?.kind || '产物'}：${path}`;
+        const btnOpen = document.createElement('button');
+        btnOpen.className = 'btn btn-secondary btn-sm';
+        btnOpen.innerText = '打开';
+        btnOpen.addEventListener('click', () => openArtifact(path));
+        const btnDown = document.createElement('button');
+        btnDown.className = 'btn btn-secondary btn-sm';
+        btnDown.innerText = '下载';
+        btnDown.addEventListener('click', () => downloadArtifact(path));
+        row.appendChild(label);
+        row.appendChild(btnOpen);
+        row.appendChild(btnDown);
+        artEl.appendChild(row);
+      }
+    }
+    async function openArtifact(path) {
+      if (!path) return;
+      try { await apiCall('/api/artifacts/open', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path}) }); } catch {}
+    }
+    function downloadArtifact(path) {
+      if (!path) return;
+      window.open('/api/artifacts/download?path=' + encodeURIComponent(path), '_blank');
+    }
     
     function openPath(type) {
       if (type === 'report') {
         const path = document.getElementById('outReport').innerText;
         if (path) {
-          // 在新窗口中打开文件路径（实际上浏览器无法直接打开本地文件）
-          // 这里我们可以提供一个下载链接或者显示路径让用户手动打开
-          alert(`报告文件路径：\n${path}\n\n请在文件管理器中打开此文件。`);
+          openArtifact(path);
         }
       }
     }

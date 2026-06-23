@@ -232,7 +232,7 @@ def run_analysis(
             )
             
             # 记录到 Run Index
-            upsert_run_from_result("payment_monitor", result, cfg)
+            upsert_run_from_result("payment_monitor", cfg, result)
             
             logger.info("收款进度监控工具完成")
             return result
